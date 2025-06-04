@@ -62,6 +62,8 @@ hashbrown = { workspace = true, features = ["default-hasher"] }
 bitflags = { workspace = true }
 futures = { workspace = true, features = ["alloc"], optional = true }
 bytes = { workspace = true, optional = true }
+embedded-io = { version = "0.6.1", features = ["alloc"], optional = true }
+sha2 = { version = "0.10.2", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-sys]
 workspace = true
@@ -402,3 +404,13 @@ component-model-async-bytes = [
   "component-model-async",
   "dep:bytes",
 ]
+
+# Enables support for record/replay for components
+rr-component = ["component-model", "rr"]
+# Enable support for the common base infrastructure of record/replay
+# By default, this supports core wasm `rr`. For components, enable `rr-component`
+rr = ["dep:embedded-io"]
+
+# Enables record/replay with support for additional validation signatures/checks.
+rr-validate = ["rr"]
+

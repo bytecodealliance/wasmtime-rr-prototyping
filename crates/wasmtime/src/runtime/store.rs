@@ -85,6 +85,10 @@ use crate::component::concurrent;
 use crate::fiber;
 use crate::module::RegisteredModuleId;
 use crate::prelude::*;
+#[cfg(feature = "rr-validate")]
+use crate::rr::Validate;
+#[cfg(feature = "rr")]
+use crate::rr::{RREvent, RecordBuffer, Recorder, ReplayBuffer, ReplayError, Replayer};
 #[cfg(feature = "gc")]
 use crate::runtime::vm::GcRootsList;
 #[cfg(feature = "stack-switching")]
@@ -409,6 +413,17 @@ pub struct StoreOpaque {
     /// For example if Pulley is enabled and configured then this will store a
     /// Pulley interpreter.
     executor: Executor,
+
+    /// Storage for recording execution
+    ///
+    /// `None` implies recording is disabled for this store
+    #[cfg(feature = "rr")]
+    record_buffer: Option<RecordBuffer>,
+    /// Storage for replaying execution
+    ///
+    /// `None` implies replay is disabled for this store
+    #[cfg(feature = "rr")]
+    replay_buffer: Option<ReplayBuffer>,
 }
 
 /// Executor state within `StoreOpaque`.
@@ -601,6 +616,30 @@ impl<T> Store<T> {
             executor: Executor::new(engine),
             #[cfg(feature = "component-model-async")]
             concurrent_async_state: Default::default(),
+            #[cfg(feature = "rr")]
+            record_buffer: engine.rr().and_then(|v| {
+                v.record().and_then(|record| {
+                    Some(
+                        RecordBuffer::new_recorder(
+                            (record.writer_initializer)(),
+                            record.settings.clone(),
+                        )
+                        .unwrap(),
+                    )
+                })
+            }),
+            #[cfg(feature = "rr")]
+            replay_buffer: engine.rr().and_then(|v| {
+                v.replay().and_then(|replay| {
+                    Some(
+                        ReplayBuffer::new_replayer(
+                            (replay.reader_initializer)(),
+                            replay.settings.clone(),
+                        )
+                        .unwrap(),
+                    )
+                })
+            }),
         };
         let mut inner = Box::new(StoreInner {
             inner,
@@ -1417,6 +1456,106 @@ impl StoreOpaque {
     #[inline]
     pub fn vm_store_context_mut(&mut self) -> &mut VMStoreContext {
         &mut self.vm_store_context
+    }
+
+    #[cfg(feature = "rr")]
+    #[inline(always)]
+    pub fn record_buffer_mut(&mut self) -> Option<&mut RecordBuffer> {
+        self.record_buffer.as_mut()
+    }
+
+    #[cfg(feature = "rr")]
+    #[inline(always)]
+    pub fn replay_buffer_mut(&mut self) -> Option<&mut ReplayBuffer> {
+        self.replay_buffer.as_mut()
+    }
+
+    /// Record the given event into the store's record buffer
+    ///
+    /// Convenience wrapper around [`Recorder::record_event`]
+    #[cfg(feature = "rr")]
+    #[inline(always)]
+    pub(crate) fn record_event<T, F>(&mut self, f: F) -> Result<()>
+    where
+        T: Into<RREvent>,
+        F: FnOnce() -> T,
+    {
+        if let Some(buf) = self.record_buffer_mut() {
+            buf.record_event(f)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Conditionally record the given event into the store's record buffer
+    /// if validation is enabled for recording
+    ///
+    /// Convenience wrapper around [`Recorder::record_event_validation`]
+    #[cfg(feature = "rr-validate")]
+    #[inline(always)]
+    pub(crate) fn record_event_validation<T, F>(&mut self, f: F) -> Result<()>
+    where
+        T: Into<RREvent>,
+        F: FnOnce() -> T,
+    {
+        if let Some(buf) = self.record_buffer_mut() {
+            buf.record_event_validation(f)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Process the next replay event from the store's replay buffer
+    ///
+    /// Convenience wrapper around [`Replayer::next_event_and`]
+    #[cfg(feature = "rr")]
+    #[inline]
+    pub(crate) fn next_replay_event_and<T, F>(&mut self, f: F) -> Result<(), ReplayError>
+    where
+        T: TryFrom<RREvent>,
+        ReplayError: From<<T as TryFrom<RREvent>>::Error>,
+        F: FnOnce(T) -> Result<(), ReplayError>,
+    {
+        if let Some(buf) = self.replay_buffer_mut() {
+            buf.next_event_and(f)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Process the next replay event as a validation event from the store's replay buffer
+    /// and if validation is enabled on replay, and run the validation check
+    ///
+    /// Convenience wrapper around [`Replayer::next_event_validation`]
+    #[cfg(feature = "rr-validate")]
+    #[inline]
+    pub(crate) fn next_replay_event_validation<T, Y>(
+        &mut self,
+        expect: &Y,
+    ) -> Result<(), ReplayError>
+    where
+        T: TryFrom<RREvent> + Validate<Y>,
+        ReplayError: From<<T as TryFrom<RREvent>>::Error>,
+    {
+        if let Some(buf) = self.replay_buffer_mut() {
+            buf.next_event_validation::<T, Y>(expect)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Check if replay is enabled for the Store
+    ///
+    /// Note: Defaults to false when `rr` feature is disabled
+    #[inline(always)]
+    pub fn replay_enabled(&self) -> bool {
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "rr")] {
+                self.replay_buffer.is_some()
+            } else {
+                false
+            }
+        }
     }
 
     #[inline(never)]

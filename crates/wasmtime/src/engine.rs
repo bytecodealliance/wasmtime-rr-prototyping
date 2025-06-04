@@ -1,4 +1,6 @@
 use crate::Config;
+#[cfg(feature = "rr")]
+use crate::RRConfig;
 use crate::prelude::*;
 #[cfg(feature = "runtime")]
 pub use crate::runtime::code_memory::CustomCodeMemory;
@@ -252,6 +254,14 @@ impl Engine {
     #[inline]
     pub fn is_async(&self) -> bool {
         self.config().async_support
+    }
+
+    /// Returns an immutable reference to the record/replay configuration settings
+    /// used by the engine
+    #[cfg(feature = "rr")]
+    #[inline]
+    pub fn rr(&self) -> Option<&RRConfig> {
+        self.config().rr.as_ref()
     }
 
     /// Detects whether the bytes provided are a precompiled object produced by
