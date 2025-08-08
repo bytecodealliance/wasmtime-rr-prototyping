@@ -576,12 +576,31 @@ fn inflate_latin1_bytes(dst: &mut [u16], latin1_bytes_so_far: usize) -> &mut [u1
     return rest;
 }
 
+/// Hook for record/replay of libcalls. Currently stubbed for record and panics on replay
+///
+/// TODO: Implement libcall hooks
+#[inline]
+fn rr_hook(store: &mut dyn VMStore, libcall: &str) -> Result<()> {
+    #[cfg(feature = "rr-component")]
+    {
+        if (*store).replay_enabled() {
+            bail!("Replay support for libcall {libcall:?} not yet supported!");
+        } else {
+            use crate::rr::marker_events::CustomMessageEvent;
+            (*store).record_event(|| CustomMessageEvent::from(libcall))?;
+        }
+    }
+    let _ = (store, libcall);
+    Ok(())
+}
+
 fn resource_new32(
     store: &mut dyn VMStore,
     instance: Instance,
     resource: u32,
     rep: u32,
 ) -> Result<u32> {
+    rr_hook(store, "resource_new32")?;
     let resource = TypeResourceTableIndex::from_u32(resource);
     instance.resource_new32(store, resource, rep)
 }
@@ -592,6 +611,7 @@ fn resource_rep32(
     resource: u32,
     idx: u32,
 ) -> Result<u32> {
+    rr_hook(store, "resource_rep32")?;
     let resource = TypeResourceTableIndex::from_u32(resource);
     instance.resource_rep32(store, resource, idx)
 }
@@ -602,6 +622,7 @@ fn resource_drop(
     resource: u32,
     idx: u32,
 ) -> Result<ResourceDropRet> {
+    rr_hook(store, "resource_drop")?;
     let resource = TypeResourceTableIndex::from_u32(resource);
     Ok(ResourceDropRet(
         instance.resource_drop(store, resource, idx)?,
@@ -628,6 +649,7 @@ fn resource_transfer_own(
     src_table: u32,
     dst_table: u32,
 ) -> Result<u32> {
+    rr_hook(store, "resource_transfer_own")?;
     let src_table = TypeResourceTableIndex::from_u32(src_table);
     let dst_table = TypeResourceTableIndex::from_u32(dst_table);
     instance.resource_transfer_own(store, src_idx, src_table, dst_table)
@@ -640,16 +662,19 @@ fn resource_transfer_borrow(
     src_table: u32,
     dst_table: u32,
 ) -> Result<u32> {
+    rr_hook(store, "resource_transfer_borrow")?;
     let src_table = TypeResourceTableIndex::from_u32(src_table);
     let dst_table = TypeResourceTableIndex::from_u32(dst_table);
     instance.resource_transfer_borrow(store, src_idx, src_table, dst_table)
 }
 
 fn resource_enter_call(store: &mut dyn VMStore, instance: Instance) {
+    rr_hook(store, "resource_enter_call").unwrap();
     instance.resource_enter_call(store)
 }
 
 fn resource_exit_call(store: &mut dyn VMStore, instance: Instance) -> Result<()> {
+    rr_hook(store, "resource_exit_call")?;
     instance.resource_exit_call(store)
 }
 

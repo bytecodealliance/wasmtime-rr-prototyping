@@ -932,6 +932,20 @@ fn pre_instantiate_raw(
         imports.push(&item, store);
     }
 
+    #[cfg(feature = "rr")]
+    if module.engine().rr().is_some()
+        && module.exports().any(|export| {
+            use crate::ExternType;
+            if let ExternType::Memory(_) = export.ty() {
+                true
+            } else {
+                false
+            }
+        })
+    {
+        bail!("Cannot support record/replay for core wasm modules when a memory is exported");
+    }
+
     Ok(imports)
 }
 

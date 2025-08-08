@@ -48,6 +48,7 @@ pub(crate) mod linker;
 pub(crate) mod memory;
 pub(crate) mod module;
 pub(crate) mod resources;
+pub(crate) mod rr;
 pub(crate) mod store;
 pub(crate) mod trampoline;
 pub(crate) mod trap;

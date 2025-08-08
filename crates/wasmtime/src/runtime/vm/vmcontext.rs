@@ -1605,6 +1605,18 @@ impl ValRaw {
         assert!(cfg!(feature = "gc") || exnref == 0);
         exnref
     }
+
+    /// Get the raw bits of the union
+    #[inline]
+    pub fn as_bytes(&self) -> [u8; mem::size_of::<Self>()] {
+        unsafe { mem::transmute(*self) }
+    }
+
+    /// Construct ValRaw from raw bits
+    #[inline]
+    pub fn from_bytes(value: [u8; mem::size_of::<Self>()]) -> Self {
+        unsafe { mem::transmute(value) }
+    }
 }
 
 /// An "opaque" version of `VMContext` which must be explicitly casted to a

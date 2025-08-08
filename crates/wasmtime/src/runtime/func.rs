@@ -1482,6 +1482,69 @@ impl Func {
     }
 }
 
+/// Convenience methods to inject record + replay logic
+mod rr_hooks {
+    use super::*;
+    #[cfg(feature = "rr")]
+    use crate::rr::core_events::HostFuncReturnEvent;
+    use wasmtime_environ::WasmFuncType;
+
+    #[inline]
+    /// Record and replay hook operation for host function entry events
+    pub fn record_replay_host_func_entry(
+        args: &[MaybeUninit<ValRaw>],
+        wasm_func_type: &WasmFuncType,
+        store: &mut StoreOpaque,
+    ) -> Result<()> {
+        #[cfg(all(feature = "rr", feature = "rr-validate"))]
+        {
+            // Record/replay the raw parameter args
+            use crate::rr::core_events::HostFuncEntryEvent;
+            store.record_event_validation(|| {
+                let num_params = wasm_func_type.params().len();
+                HostFuncEntryEvent::new(&args[..num_params], wasm_func_type.clone())
+            })?;
+            store.next_replay_event_validation::<HostFuncEntryEvent, _>(wasm_func_type)?;
+        }
+        let _ = (args, wasm_func_type, store);
+        Ok(())
+    }
+
+    #[inline]
+    /// Record hook operation for host function return events
+    pub fn record_host_func_return(
+        args: &[MaybeUninit<ValRaw>],
+        wasm_func_type: &WasmFuncType,
+        store: &mut StoreOpaque,
+    ) -> Result<()> {
+        // Record the return values
+        #[cfg(feature = "rr")]
+        store.record_event(|| {
+            let func_type = wasm_func_type;
+            let num_results = func_type.params().len();
+            HostFuncReturnEvent::new(&args[..num_results])
+        })?;
+        let _ = (args, wasm_func_type, store);
+        Ok(())
+    }
+
+    #[inline]
+    /// Replay hook operation for host function return events
+    pub fn replay_host_func_return(
+        args: &mut [MaybeUninit<ValRaw>],
+        wasm_func_type: &WasmFuncType,
+        store: &mut StoreOpaque,
+    ) -> Result<()> {
+        #[cfg(feature = "rr")]
+        store.next_replay_event_and(|event: HostFuncReturnEvent| {
+            event.move_into_slice(args);
+            Ok(())
+        })?;
+        let _ = (args, wasm_func_type, store);
+        Ok(())
+    }
+}
+
 /// Prepares for entrance into WebAssembly.
 ///
 /// This function will set up context such that `closure` is allowed to call a
@@ -2364,45 +2427,74 @@ impl HostContext {
             };
             let func = &state.func;
 
-            let ret = 'ret: {
-                if let Err(trap) = caller.store.0.call_hook(CallHook::CallingHost) {
-                    break 'ret R::fallible_from_error(trap);
-                }
-
-                let mut store = if P::may_gc() {
-                    AutoAssertNoGc::new(caller.store.0)
-                } else {
-                    unsafe { AutoAssertNoGc::disabled(caller.store.0) }
-                };
-                // SAFETY: this function requires `args` to be valid and the
-                // `WasmTyList` trait means that everything should be correctly
-                // ascribed/typed, making this valid to load from.
-                let params = unsafe { P::load(&mut store, args.as_mut()) };
-                let _ = &mut store;
-                drop(store);
-
-                let r = func(caller.sub_caller(), params);
-
-                if let Err(trap) = caller.store.0.call_hook(CallHook::ReturningFromHost) {
-                    break 'ret R::fallible_from_error(trap);
-                }
-                r.into_fallible()
+            let wasm_func_subtype = {
+                let type_index = state._ty.index();
+                caller.engine().signatures().borrow(type_index).unwrap()
             };
+            let wasm_func_type = wasm_func_subtype.unwrap_func();
 
-            if !ret.compatible_with_store(caller.store.0) {
-                bail!("host function attempted to return cross-`Store` value to Wasm")
-            } else {
-                let mut store = if R::may_gc() {
-                    AutoAssertNoGc::new(caller.store.0)
-                } else {
-                    unsafe { AutoAssertNoGc::disabled(caller.store.0) }
+            // Record/replay(validation) of the raw parameter arguments
+            // Don't need auto-assert GC store here since we aren't using P, just raw args
+            rr_hooks::record_replay_host_func_entry(
+                unsafe { args.as_ref() },
+                wasm_func_type,
+                caller.store.0,
+            )?;
+
+            if !caller.store.0.replay_enabled() {
+                let ret = 'ret: {
+                    if let Err(trap) = caller.store.0.call_hook(CallHook::CallingHost) {
+                        break 'ret R::fallible_from_error(trap);
+                    }
+                    // Setup call parameters
+                    let params = {
+                        let mut store = if P::may_gc() {
+                            AutoAssertNoGc::new(caller.store.0)
+                        } else {
+                            unsafe { AutoAssertNoGc::disabled(caller.store.0) }
+                        };
+                        // SAFETY: this function requires `args` to be valid and the
+                        // `WasmTyList` trait means that everything should be correctly
+                        // ascribed/typed, making this valid to load from.
+                        unsafe { P::load(&mut store, args.as_mut()) }
+                        // Drop on store is necessary here; scope closure makes this implicit
+                    };
+                    let r = func(caller.sub_caller(), params);
+                    if let Err(trap) = caller.store.0.call_hook(CallHook::ReturningFromHost) {
+                        break 'ret R::fallible_from_error(trap);
+                    }
+                    r.into_fallible()
                 };
-                // SAFETY: this function requires that `args` is safe for this
-                // type signature, and the guarantees of `WasmRet` means that
-                // everything should be typed appropriately.
-                let ret = unsafe { ret.store(&mut store, args.as_mut())? };
-                Ok(ret)
+
+                if !ret.compatible_with_store(caller.store.0) {
+                    bail!("host function attempted to return cross-`Store` value to Wasm")
+                } else {
+                    let mut store = if R::may_gc() {
+                        AutoAssertNoGc::new(caller.store.0)
+                    } else {
+                        unsafe { AutoAssertNoGc::disabled(caller.store.0) }
+                    };
+                    // SAFETY: this function requires that `args` is safe for this
+                    // type signature, and the guarantees of `WasmRet` means that
+                    // everything should be typed appropriately.
+                    unsafe { ret.store(&mut store, args.as_mut())? };
+                }
+                // Record the return values
+                rr_hooks::record_host_func_return(
+                    unsafe { args.as_ref() },
+                    wasm_func_type,
+                    caller.store.0,
+                )?;
+            } else {
+                // Replay the return values
+                rr_hooks::replay_host_func_return(
+                    unsafe { args.as_mut() },
+                    wasm_func_type,
+                    caller.store.0,
+                )?;
             }
+
+            Ok(())
         };
 
         // With nothing else on the stack move `run` into this

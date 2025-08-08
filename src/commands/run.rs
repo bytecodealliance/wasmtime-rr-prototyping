@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use wasi_common::sync::{Dir, TcpListener, WasiCtxBuilder, ambient_authority};
+#[cfg(feature = "rr")]
+use wasmtime::ReplayConfig;
 use wasmtime::{Engine, Func, Module, Store, StoreLimits, Val, ValType};
 use wasmtime_wasi::{WasiCtxView, WasiView};
 
@@ -85,7 +87,10 @@ enum CliLinker {
 
 impl RunCommand {
     /// Executes the command.
-    pub fn execute(mut self) -> Result<()> {
+    pub fn execute(
+        mut self,
+        #[cfg(feature = "rr")] replay_cfg: Option<ReplayConfig>,
+    ) -> Result<()> {
         self.run.common.init_logging()?;
 
         let mut config = self.run.common.config(None)?;
@@ -103,6 +108,11 @@ impl RunCommand {
                 config.epoch_interruption(true);
             }
             None => {}
+        }
+
+        #[cfg(feature = "rr")]
+        if let Some(cfg) = replay_cfg {
+            config.enable_replay(cfg)?;
         }
 
         let engine = Engine::new(&config)?;

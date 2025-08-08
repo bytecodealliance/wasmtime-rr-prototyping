@@ -89,6 +89,19 @@ enum Subcommand {
     /// Inspect `*.cwasm` files output from Wasmtime
     #[cfg(feature = "objdump")]
     Objdump(wasmtime_cli::commands::ObjdumpCommand),
+
+    /// Run a determinstic, embedding-agnostic replay execution of the Wasm module
+    /// according to a prior recorded execution trace (e.g. generated with the
+    /// `--record` option under `wasmtime run`).
+    ///
+    /// The options below are the superset of the `run` command. The notable options
+    /// added for replay are `--trace` (to specify the recorded traces) and
+    /// corresponding settings (e.g. `--validate`)
+    ///
+    /// Note: Minimal configs for deterministic Wasm semantics will be
+    /// enforced during replay by default (NaN canonicalization, deterministic relaxed SIMD)
+    #[cfg(feature = "rr")]
+    Replay(wasmtime_cli::commands::ReplayCommand),
 }
 
 impl Wasmtime {
@@ -101,7 +114,10 @@ impl Wasmtime {
 
         match subcommand {
             #[cfg(feature = "run")]
-            Subcommand::Run(c) => c.execute(),
+            Subcommand::Run(c) => c.execute(
+                #[cfg(feature = "rr")]
+                None,
+            ),
 
             #[cfg(feature = "cache")]
             Subcommand::Config(c) => c.execute(),
@@ -126,6 +142,9 @@ impl Wasmtime {
 
             #[cfg(feature = "objdump")]
             Subcommand::Objdump(c) => c.execute(),
+
+            #[cfg(feature = "rr")]
+            Subcommand::Replay(c) => c.execute(),
         }
     }
 }
