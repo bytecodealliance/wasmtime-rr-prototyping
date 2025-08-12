@@ -488,7 +488,7 @@ wasmtime_option_group! {
     #[derive(PartialEq, Clone, Deserialize)]
     #[serde(rename_all = "kebab-case", deny_unknown_fields)]
     pub struct RecordOptions {
-        /// Filesystem endpoint to store the recorded execution trace
+        /// Filesystem endpoint to store the recorded execution trace (empty string "" for void endpoint)
         pub path: Option<String>,
         /// Include (optional) signatures to facilitate validation checks during replay
         /// (see `wasmtime replay` for details).
@@ -1022,7 +1022,7 @@ impl CommonOptions {
         match_feature! {
             ["rr" : record.path.clone()]
             path => {
-                use std::{io::BufWriter, sync::Arc};
+                use std::{io, sync::Arc};
                 use wasmtime::{RecordConfig, RecordSettings};
                 let default_settings = RecordSettings::default();
                 match_feature! {
@@ -1032,7 +1032,11 @@ impl CommonOptions {
                 }
                 config.enable_record(RecordConfig {
                     writer_initializer: Arc::new(move || {
-                        Box::new(BufWriter::new(fs::File::create(&path).unwrap()))
+                        if path.trim().is_empty() {
+                            Box::new(io::sink())
+                        } else {
+                            Box::new(io::BufWriter::new(fs::File::create(&path).unwrap()))
+                        }
                     }),
                     settings: RecordSettings {
                         add_validation: record
