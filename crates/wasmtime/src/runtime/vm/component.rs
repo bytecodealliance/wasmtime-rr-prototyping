@@ -31,7 +31,7 @@ use wasmtime_environ::{HostPtr, PrimaryMap, VMSharedTypeIndex};
 )]
 const INVALID_PTR: usize = 0xdead_dead_beef_beef_u64 as usize;
 
-mod libcalls;
+pub(crate) mod libcalls;
 mod resources;
 
 #[cfg(feature = "component-model-async")]

@@ -430,6 +430,7 @@ impl InterpreterRef<'_> {
                 (
                     $(
                         $( #[cfg($attr:meta)] )?
+                        $( #[rr_builtin($($rr:tt)*)] )?
                         $name:ident($($pname:ident: $param:ident ),* ) $(-> $result:ident)?;
                     )*
                 ) => {

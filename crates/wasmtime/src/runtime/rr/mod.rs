@@ -110,6 +110,8 @@ rr_event! {
     ComponentLowerStoreReturn(__component_events::LowerStoreReturnEvent),
     /// An attempt to obtain a mutable slice into Wasm linear memory
     ComponentMemorySliceWrite(__component_events::MemorySliceWriteEvent),
+    /// Return from a component builtin
+    ComponentBuiltinReturn(__component_events::BuiltinReturnEvent),
 
     // OPTIONAL events for replay validation
     //
@@ -122,7 +124,9 @@ rr_event! {
     /// Call into [Lower::lower] for type lowering
     ComponentLowerEntry(__component_events::LowerEntryEvent),
     /// Call into [Lower::store] during type lowering
-    ComponentLowerStoreEntry(__component_events::LowerStoreEntryEvent)
+    ComponentLowerStoreEntry(__component_events::LowerStoreEntryEvent),
+    /// Call into a component builtin
+    ComponentBuiltinEntry(__component_events::BuiltinEntryEvent)
 }
 
 impl RREvent {
@@ -234,7 +238,7 @@ pub trait Replayer: Iterator<Item = RREvent> {
     #[allow(
         unused,
         reason = "currently used only for validation resulting in \
-    many unnecessary feature gates. will expand in the future to more features"
+    many unnecessary feature gates. will expand in the future to more features and this attribute can be removed"
     )]
     fn settings(&self) -> &ReplaySettings;
 
@@ -242,7 +246,7 @@ pub trait Replayer: Iterator<Item = RREvent> {
     #[allow(
         unused,
         reason = "currently used only for validation resulting in \
-    many unnecessary feature gates. will expand in the future to more features"
+    many unnecessary feature gates. will expand in the future to more features and this attribute can be removed"
     )]
     fn trace_settings(&self) -> &RecordSettings;
 
@@ -394,8 +398,18 @@ pub struct ReplayBuffer {
     /// Reader to read replay trace from
     reader: Box<dyn ReplayReader>,
     /// Settings in replay configuration
+    #[allow(
+        unused,
+        reason = "currently used only for validation resulting in \
+    many unnecessary feature gates. will expand in the future to more features and this attribute can be removed"
+    )]
     settings: ReplaySettings,
     /// Settings for record configuration (encoded in the trace)
+    #[allow(
+        unused,
+        reason = "currently used only for validation resulting in \
+    many unnecessary feature gates. will expand in the future to more features and this attribute can be removed"
+    )]
     trace_settings: RecordSettings,
     /// Intermediate static buffer for deserialization
     deser_buffer: Vec<u8>,

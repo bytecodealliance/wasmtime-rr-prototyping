@@ -75,13 +75,13 @@ mod rr_hooks {
             use crate::rr::component_events::LowerStoreEntryEvent;
             cx.store
                 .0
-                .record_event_validation(|| LowerStoreEntryEvent::new(ty, offset))?;
+                .record_event_validation(|| LowerStoreEntryEvent { ty, offset })?;
         }
         let store_result = lower_store(cx, ty, offset);
         #[cfg(feature = "rr-component")]
         cx.store
             .0
-            .record_event(|| LowerStoreReturnEvent::new(&store_result))?;
+            .record_event(|| LowerStoreReturnEvent::from_anyhow_result(&store_result))?;
         store_result
     }
 
@@ -100,13 +100,13 @@ mod rr_hooks {
             use crate::rr::component_events::LowerEntryEvent;
             cx.store
                 .0
-                .record_event_validation(|| LowerEntryEvent::new(ty))?;
+                .record_event_validation(|| LowerEntryEvent { ty })?;
         }
         let lower_result = lower(cx, ty);
         #[cfg(feature = "rr-component")]
         cx.store
             .0
-            .record_event(|| LowerReturnEvent::new(&lower_result))?;
+            .record_event(|| LowerReturnEvent::from_anyhow_result(&lower_result))?;
         lower_result
     }
 }

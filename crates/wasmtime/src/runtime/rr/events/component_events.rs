@@ -1,10 +1,9 @@
 //! Module comprising of component model wasm events
 
 use super::*;
-#[expect(unused_imports, reason = "used for doc-links")]
-use crate::component::{Component, ComponentType};
-use wasmtime_environ::component::InterfaceType;
-use wasmtime_environ::component::TypeFunc;
+use crate::component::Component;
+use crate::vm::component::libcalls::ResourceDropRet;
+use wasmtime_environ::{self, component::InterfaceType, component::TypeFunc};
 
 /// A [`Component`] instantiatation event
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,81 +75,189 @@ impl HostFuncReturnEvent {
     }
 }
 
+/// A reallocation call event in the Component Model canonical ABI
+///
+/// Usually performed during lowering of complex [`ComponentType`]s to Wasm
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReallocEntryEvent {
+    pub old_addr: usize,
+    pub old_size: usize,
+    pub old_align: u32,
+    pub new_size: usize,
+}
+
+/// Entry to a type lowering invocation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LowerEntryEvent {
+    pub ty: InterfaceType,
+}
+
+/// Entry to store invocations during type lowering
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LowerStoreEntryEvent {
+    pub ty: InterfaceType,
+    pub offset: usize,
+}
+
+/// A write to a mutable slice of Wasm linear memory by the host. This is the
+/// fundamental representation of host-written data to Wasm and is usually
+/// performed during lowering of a [`ComponentType`].
+/// Note that this currently signifies a single mutable operation at the smallest granularity
+/// on a given linear memory slice. These can be optimized and coalesced into
+/// larger granularity operations in the future at either the recording or the replay level.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySliceWriteEvent {
+    pub offset: usize,
+    pub bytes: Vec<u8>,
+}
+
 macro_rules! generic_new_result_events {
     (
         $(
             $(#[doc = $doc:literal])*
-            $event:ident => ($ok_ty:ty,$err_variant:path)
+            $event:ident -> ($ok_ty:ty,$err_variant:path)
         ),*
     ) => (
         $(
             $(#[doc = $doc])*
             #[derive(Debug, Clone, Serialize, Deserialize)]
-            pub struct $event {
-                ret: Result<$ok_ty, EventActionError>,
-            }
+            pub struct $event(Result<$ok_ty, EventActionError>);
 
             impl $event {
-                pub fn new(ret: &Result<$ok_ty>) -> Self {
-                    Self {
-                        ret: ret.as_ref().map(|t| *t).map_err(|e| $err_variant(e.to_string()))
-                    }
+                pub fn from_anyhow_result(ret: &Result<$ok_ty>) -> Self {
+                    Self(ret.as_ref().map(|t| *t).map_err(|e| $err_variant(e.to_string())))
                 }
-                pub fn ret(self) -> Result<$ok_ty, EventActionError> { self.ret }
+                pub fn ret(self) -> Result<$ok_ty, EventActionError> { self.0 }
             }
 
         )*
     );
 }
 
-macro_rules! generic_new_events {
+// Macro to generate RR events from the builtin descriptions
+macro_rules! builtin_events {
+    // Main rule matching component function definitions
     (
         $(
-            $(#[doc = $doc:literal])*
-            $struct:ident {
-                $(
-                    $field:ident : $field_ty:ty
-                ),*
-            }
-        ),*
-    ) => (
-        $(
-            #[derive(Debug, Clone, Serialize, Deserialize)]
-            $(#[doc = $doc])*
-            pub struct $struct {
-                $(
-                    pub $field: $field_ty,
-                )*
-            }
+            $( #[cfg($attr:meta)] )?
+            $( #[rr_builtin(entry = $rr_entry:ident, exit = $rr_return:ident, variant = $rr_var:ident $(, success_ty = $rr_succ:tt)?)] )?
+            $name:ident( vmctx: vmctx $(, $pname:ident: $param:ident )* ) $( -> $result:ident )?;
         )*
+    ) => (
+        builtin_events!(@gen_return_enum $($($rr_var $rr_return)?)*);
+        builtin_events!(@gen_entry_enum $($($rr_var $rr_entry)?)*);
+        // Prioitize ret_succ if provided
         $(
-            impl $struct {
-                pub fn new($($field: $field_ty),*) -> Self {
-                    Self {
-                        $($field),*
+            builtin_events!(@gen_events
+                $($rr_entry $rr_return)?
+                $($pname, $param)*
+                -> $($($rr_succ)?)? $($result)?
+            );
+        )*
+    );
+
+    // All things related to BuiltinReturnEvent enum
+    (@gen_return_enum $($rr_var:ident $event:ident)*) => {
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        pub enum BuiltinReturnEvent {
+            $($rr_var($event),)*
+        }
+        builtin_events!(@from_impls BuiltinReturnEvent $($rr_var $event)*);
+    };
+
+    // All things related to BuiltinEntryEvent enum
+    (@gen_entry_enum $($rr_var:ident $event:ident)*) => {
+        // PartialEq gives all these events `Validate`
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        pub enum BuiltinEntryEvent {
+            $($rr_var($event),)*
+        }
+        builtin_events!(@from_impls BuiltinEntryEvent $($rr_var $event)*);
+    };
+
+
+    // Generate entry/exit events if rr_builtin provided
+    (@gen_events $rr_entry:ident $rr_return:ident $($pname:ident, $param:ident)* -> $($result_opts:tt)*) => {
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        pub struct $rr_entry {
+            $(pub $pname: $param),*
+        }
+
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        pub struct $rr_return(Result<builtin_events!(@ret_first $($result_opts)*), EventActionError>);
+
+        impl $rr_return {
+            pub fn from_anyhow_result(ret: &Result<builtin_events!(@ret_first $($result_opts)*)>) -> Self {
+                Self(
+                    ret.as_ref()
+                        .map(|t| t.clone())
+                        .map_err(|e| EventActionError::BuiltinError(e.to_string())),
+                )
+            }
+            pub fn ret(self) -> Result<builtin_events!(@ret_first $($result_opts)*)> {
+                self.0.map_err(|e| e.into())
+            }
+        }
+
+    };
+
+
+    // Conversion to/from specific return `$event` and `BuiltinEntryEvent`
+    (@from_impls $enum:ident $($rr_var:ident $event:ident)*) => {
+        $(
+            impl From<$event> for $enum {
+                fn from(value: $event) -> Self {
+                    Self::$rr_var(value)
+                }
+            }
+
+            impl TryFrom<$enum> for $event {
+                type Error = ReplayError;
+
+                fn try_from(value: $enum) -> Result<Self, Self::Error> {
+                    #[allow(irrefutable_let_patterns)]
+                    if let $enum::$rr_var(x) = value {
+                        Ok(x)
+                    } else {
+                        Err(ReplayError::IncorrectEventVariant)
                     }
                 }
             }
         )*
-    );
+    };
+
+    // Return first value if it exists
+    (@ret_first $first:tt $($rest:tt)*) => ($first);
+    (@ret_first ) => ();
+
+
+    // Stubbed if `rr_builtin` not provided
+    (@gen_events $($pname:ident, $param:ident)* -> $($result_opts:ident)*) => {};
 }
 
+// Return events with anyhow error conversion to EventActionError
 generic_new_result_events! {
     /// Return from a reallocation call (needed only for validation)
-    ReallocReturnEvent => (usize, EventActionError::ReallocError),
+    ReallocReturnEvent -> (usize, EventActionError::ReallocError),
     /// Return from a type lowering invocation
-    LowerReturnEvent => ((), EventActionError::LowerError),
+    LowerReturnEvent -> ((), EventActionError::LowerError),
     /// Return from store invocations during type lowering
-    LowerStoreReturnEvent => ((), EventActionError::LowerStoreError)
+    LowerStoreReturnEvent -> ((), EventActionError::LowerStoreError)
 }
 
+// Entry/return events for each builtin function
+wasmtime_environ::foreach_builtin_component_function!(builtin_events);
+
+// === Special Validation ===
+// `realloc` needs to actually check for divergence
+// between recorded and replayed realloc effects
 #[cfg(feature = "rr-validate")]
 impl Validate<Result<usize>> for ReallocReturnEvent {
     /// We can check that realloc is deterministic (as expected by the engine)
     fn validate(&self, expect_ret: &Result<usize>) -> Result<(), ReplayError> {
         self.log();
         // Cannot just use eq since anyhow::Error and EventActionError cannot be compared
-        match (self.ret.as_ref(), expect_ret.as_ref()) {
+        match (self.0.as_ref(), expect_ret.as_ref()) {
             (Ok(r), Ok(s)) => {
                 if r == s {
                     Ok(())
@@ -167,39 +274,5 @@ impl Validate<Result<usize>> for ReallocReturnEvent {
             (Ok(_), Err(_)) => Err(ReplayError::FailedValidation),
             (Err(_), Ok(_)) => Err(ReplayError::FailedValidation),
         }
-    }
-}
-
-generic_new_events! {
-    /// A reallocation call event in the Component Model canonical ABI
-    ///
-    /// Usually performed during lowering of complex [`ComponentType`]s to Wasm
-    ReallocEntryEvent {
-        old_addr: usize,
-        old_size: usize,
-        old_align: u32,
-        new_size: usize
-    },
-
-    /// Entry to a type lowering invocation
-    LowerEntryEvent {
-        ty: InterfaceType
-    },
-
-    /// Entry to store invocations during type lowering
-    LowerStoreEntryEvent {
-        ty: InterfaceType,
-        offset: usize
-    },
-
-    /// A write to a mutable slice of Wasm linear memory by the host. This is the
-    /// fundamental representation of host-written data to Wasm and is usually
-    /// performed during lowering of a [`ComponentType`].
-    /// Note that this currently signifies a single mutable operation at the smallest granularity
-    /// on a given linear memory slice. These can be optimized and coalesced into
-    /// larger granularity operations in the future at either the recording or the replay level.
-    MemorySliceWriteEvent {
-        offset: usize,
-        bytes: Vec<u8>
     }
 }

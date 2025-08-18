@@ -9,6 +9,7 @@ use crate::runtime::vm::{HostResultHasUnwindSentinel, VMStore, VmSafe};
 use core::cell::Cell;
 use core::ptr::NonNull;
 use core::slice;
+use serde::{Deserialize, Serialize};
 use wasmtime_environ::component::*;
 
 const UTF16_TAG: usize = 1 << 31;
@@ -81,12 +82,15 @@ wasmtime_environ::foreach_builtin_component_function!(define_builtins);
 /// implementation following this submodule.
 mod trampolines {
     use super::{ComponentInstance, VMComponentContext};
+    #[cfg(feature = "rr-component")]
+    use crate::rr::{Replayer, component_events::*};
     use core::ptr::NonNull;
 
     macro_rules! shims {
         (
             $(
                 $( #[cfg($attr:meta)] )?
+                $( #[rr_builtin(entry = $rr_entry:ident, exit = $rr_return:ident, variant = $rr_var:ident $(, success_ty = $rr_succ:tt)? )] )?
                 $name:ident( vmctx: vmctx $(, $pname:ident: $param:ident )* ) $( -> $result:ident )?;
             )*
         ) => (
@@ -101,7 +105,7 @@ mod trampolines {
 
                         let ret = crate::runtime::vm::traphandlers::catch_unwind_and_record_trap(|| unsafe {
                             ComponentInstance::from_vmctx(vmctx, |store, instance| {
-                                shims!(@invoke $name(store, instance,) $($pname)*)
+                                shims!(@invoke $([$rr_entry, $rr_return])? $name(store, instance,) $($pname)*)
                             })
                         });
                         shims!(@convert_ret ret $($pname: $param)*)
@@ -152,6 +156,33 @@ mod trampolines {
         (@invoke $m:ident ($($args:tt)*) $param:ident $($rest:tt)*) => (
             shims!(@invoke $m ($($args)* $param,) $($rest)*)
         );
+
+        // main invoke rule with a record/replay hook wrapper around the above invoke rules
+        // when `rr_builtin`` is provided
+        (@invoke [$rr_entry:ident, $rr_exit:ident] $name:ident($store:ident, $instance:ident,) $($pname:ident)*) => ({
+            #[cfg(not(feature = "rr-component"))]
+            {
+                shims!(@invoke $name($store, $instance,) $($pname)*)
+            }
+            #[cfg(feature = "rr-component")]
+            {
+                if let Some(buf) = (*$store).replay_buffer_mut() {
+                    #[cfg(feature = "rr-validate")]
+                    buf.next_event_validation::<BuiltinEntryEvent, _>(&$rr_entry{ $($pname),* }.into())?;
+                    // Replay the return value
+                    let builtin_ret_event = buf.next_event_typed::<BuiltinReturnEvent>()?;
+                    $rr_exit::try_from(builtin_ret_event)?.ret()
+                } else {
+                    // Recording entry/return
+                    #[cfg(feature = "rr-validate")]
+                    (*$store).record_event_validation::<BuiltinEntryEvent, _>(|| $rr_entry{ $($pname),* }.into())?;
+                    let retval = shims!(@invoke $name($store, $instance,) $($pname)*);
+                    (*$store).record_event::<BuiltinReturnEvent, _>(|| $rr_exit::from_anyhow_result(&retval).into())?;
+                    retval
+                }
+            }
+        });
+
     }
 
     wasmtime_environ::foreach_builtin_component_function!(shims);
@@ -580,12 +611,14 @@ fn inflate_latin1_bytes(dst: &mut [u16], latin1_bytes_so_far: usize) -> &mut [u1
 ///
 /// TODO: Implement libcall hooks
 #[inline]
-fn rr_hook(store: &mut dyn VMStore, libcall: &str) -> Result<()> {
+fn rr_unsupported_hook(store: &mut dyn VMStore, libcall: &str) -> Result<()> {
     #[cfg(feature = "rr-component")]
     {
         if (*store).replay_enabled() {
             bail!("Replay support for libcall {libcall:?} not yet supported!");
-        } else {
+        }
+        #[cfg(feature = "rr-validate")]
+        {
             use crate::rr::marker_events::CustomMessageEvent;
             (*store).record_event(|| CustomMessageEvent::from(libcall))?;
         }
@@ -600,7 +633,6 @@ fn resource_new32(
     resource: u32,
     rep: u32,
 ) -> Result<u32> {
-    rr_hook(store, "resource_new32")?;
     let resource = TypeResourceTableIndex::from_u32(resource);
     instance.resource_new32(store, resource, rep)
 }
@@ -611,7 +643,6 @@ fn resource_rep32(
     resource: u32,
     idx: u32,
 ) -> Result<u32> {
-    rr_hook(store, "resource_rep32")?;
     let resource = TypeResourceTableIndex::from_u32(resource);
     instance.resource_rep32(store, resource, idx)
 }
@@ -622,14 +653,14 @@ fn resource_drop(
     resource: u32,
     idx: u32,
 ) -> Result<ResourceDropRet> {
-    rr_hook(store, "resource_drop")?;
     let resource = TypeResourceTableIndex::from_u32(resource);
     Ok(ResourceDropRet(
         instance.resource_drop(store, resource, idx)?,
     ))
 }
 
-struct ResourceDropRet(Option<u32>);
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ResourceDropRet(Option<u32>);
 
 unsafe impl HostResultHasUnwindSentinel for ResourceDropRet {
     type Abi = u64;
@@ -649,7 +680,6 @@ fn resource_transfer_own(
     src_table: u32,
     dst_table: u32,
 ) -> Result<u32> {
-    rr_hook(store, "resource_transfer_own")?;
     let src_table = TypeResourceTableIndex::from_u32(src_table);
     let dst_table = TypeResourceTableIndex::from_u32(dst_table);
     instance.resource_transfer_own(store, src_idx, src_table, dst_table)
@@ -662,19 +692,17 @@ fn resource_transfer_borrow(
     src_table: u32,
     dst_table: u32,
 ) -> Result<u32> {
-    rr_hook(store, "resource_transfer_borrow")?;
     let src_table = TypeResourceTableIndex::from_u32(src_table);
     let dst_table = TypeResourceTableIndex::from_u32(dst_table);
     instance.resource_transfer_borrow(store, src_idx, src_table, dst_table)
 }
 
 fn resource_enter_call(store: &mut dyn VMStore, instance: Instance) {
-    rr_hook(store, "resource_enter_call").unwrap();
+    rr_unsupported_hook(store, "resource_enter_call").unwrap();
     instance.resource_enter_call(store)
 }
 
 fn resource_exit_call(store: &mut dyn VMStore, instance: Instance) -> Result<()> {
-    rr_hook(store, "resource_exit_call")?;
     instance.resource_exit_call(store)
 }
 

@@ -83,18 +83,64 @@ pub use self::types_builder::*;
 macro_rules! foreach_builtin_component_function {
     ($mac:ident) => {
         $mac! {
+            #[rr_builtin(
+                entry = ResourceNew32EntryEvent,
+                exit = ResourceNew32ReturnEvent,
+                variant = ResourceNew32,
+                success_ty = u32
+            )]
             resource_new32(vmctx: vmctx, resource: u32, rep: u32) -> u64;
+
+            #[rr_builtin(
+                entry = ResourceRep32EntryEvent,
+                exit = ResourceRep32ReturnEvent,
+                variant = ResourceRep32,
+                success_ty = u32
+            )]
             resource_rep32(vmctx: vmctx, resource: u32, idx: u32) -> u64;
 
             // Returns an `Option<u32>` where `None` is "no destructor needed"
             // and `Some(val)` is "run the destructor on this rep". The option
             // is encoded as a 64-bit integer where the low bit is Some/None
             // and bits 1-33 are the payload.
+            #[rr_builtin(
+                entry = ResourceDropEntryEvent,
+                exit = ResourceDropReturnEvent,
+                variant = ResourceDrop,
+                success_ty = ResourceDropRet
+            )]
             resource_drop(vmctx: vmctx, resource: u32, idx: u32) -> u64;
 
+            #[rr_builtin(
+                entry = ResourceTransferOwnEntryEvent,
+                exit = ResourceTransferOwnReturnEvent,
+                variant = ResourceTransferOwn,
+                success_ty = u32
+            )]
             resource_transfer_own(vmctx: vmctx, src_idx: u32, src_table: u32, dst_table: u32) -> u64;
+
+            #[rr_builtin(
+                entry = ResourceTransferBorrowEntryEvent,
+                exit = ResourceTransferBorrowReturnEvent,
+                variant = ResourceTransferBorrow,
+                success_ty = u32
+            )]
             resource_transfer_borrow(vmctx: vmctx, src_idx: u32, src_table: u32, dst_table: u32) -> u64;
+
+            //#[rr_builtin(
+            //    entry = ResourceEnterCallEntryEvent,
+            //    exit = ResourceEnterCallReturnEvent,
+            //    variant = ResourceEnterCall,
+            //    success_ty = ()
+            //)]
             resource_enter_call(vmctx: vmctx);
+
+            #[rr_builtin(
+                entry = ResourceExitCallEntryEvent,
+                exit = ResourceExitCallReturnEvent,
+                variant = ResourceExitCall,
+                success_ty = ()
+            )]
             resource_exit_call(vmctx: vmctx) -> bool;
 
             #[cfg(feature = "component-model-async")]

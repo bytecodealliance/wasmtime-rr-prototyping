@@ -21,12 +21,16 @@ pub enum EventActionError {
     ReallocError(String),
     LowerError(String),
     LowerStoreError(String),
+    BuiltinError(String),
 }
 
 impl fmt::Display for EventActionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ReallocError(s) | Self::LowerError(s) | Self::LowerStoreError(s) => {
+            Self::ReallocError(s)
+            | Self::LowerError(s)
+            | Self::LowerStoreError(s)
+            | Self::BuiltinError(s) => {
                 write!(f, "{}", s)
             }
         }
@@ -143,8 +147,11 @@ pub mod marker_events {
     /// An event for custom String messages
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct CustomMessageEvent(pub String);
-    impl From<&str> for CustomMessageEvent {
-        fn from(v: &str) -> Self {
+    impl<T> From<T> for CustomMessageEvent
+    where
+        T: Into<String>,
+    {
+        fn from(v: T) -> Self {
             Self(v.into())
         }
     }

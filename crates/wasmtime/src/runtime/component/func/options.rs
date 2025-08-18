@@ -58,8 +58,11 @@ impl Drop for MemorySliceCell<'_> {
     fn drop(&mut self) {
         #[cfg(feature = "rr-component")]
         if let Some(buf) = &mut self.recorder {
-            buf.record_event(|| MemorySliceWriteEvent::new(self.offset, self.bytes.to_vec()))
-                .unwrap();
+            buf.record_event(|| MemorySliceWriteEvent {
+                offset: self.offset,
+                bytes: self.bytes.to_vec(),
+            })
+            .unwrap();
         }
     }
 }
@@ -115,8 +118,11 @@ impl<'a, const N: usize> Drop for ConstMemorySliceCell<'a, N> {
     fn drop(&mut self) {
         #[cfg(feature = "rr-component")]
         if let Some(buf) = &mut self.recorder {
-            buf.record_event(|| MemorySliceWriteEvent::new(self.offset, self.bytes.to_vec()))
-                .unwrap();
+            buf.record_event(|| MemorySliceWriteEvent {
+                offset: self.offset,
+                bytes: self.bytes.to_vec(),
+            })
+            .unwrap();
         }
     }
 }
@@ -488,14 +494,17 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         new_size: usize,
     ) -> Result<usize> {
         #[cfg(feature = "rr-component")]
-        self.store
-            .0
-            .record_event(|| ReallocEntryEvent::new(old, old_size, old_align, new_size))?;
+        self.store.0.record_event(|| ReallocEntryEvent {
+            old_addr: old,
+            old_size,
+            old_align,
+            new_size,
+        })?;
         let result = self.realloc_inner(old, old_size, old_align, new_size);
         #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
         self.store
             .0
-            .record_event_validation(|| ReallocReturnEvent::new(&result))?;
+            .record_event_validation(|| ReallocReturnEvent::from_anyhow_result(&result))?;
         result
     }
 
