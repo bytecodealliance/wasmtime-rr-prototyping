@@ -90,7 +90,7 @@ mod trampolines {
         (
             $(
                 $( #[cfg($attr:meta)] )?
-                $( #[rr_builtin(entry = $rr_entry:ident, exit = $rr_return:ident, variant = $rr_var:ident $(, success_ty = $rr_succ:tt)? )] )?
+                $( #[rr_builtin( variant = $rr_var:ident, entry = $rr_entry:ident $(, exit = $rr_return:ident)? $(, success_ty = $rr_succ:tt)? )] )?
                 $name:ident( vmctx: vmctx $(, $pname:ident: $param:ident )* ) $( -> $result:ident )?;
             )*
         ) => (
@@ -105,7 +105,7 @@ mod trampolines {
 
                         let ret = crate::runtime::vm::traphandlers::catch_unwind_and_record_trap(|| unsafe {
                             ComponentInstance::from_vmctx(vmctx, |store, instance| {
-                                shims!(@invoke $([$rr_entry, $rr_return])? $name(store, instance,) $($pname)*)
+                                shims!(@invoke $([$rr_entry $(, $rr_return)?])? $name(store, instance,) $($pname)*)
                             })
                         });
                         shims!(@convert_ret ret $($pname: $param)*)
@@ -182,6 +182,29 @@ mod trampolines {
                 }
             }
         });
+
+        // same as above rule for builtins *without* a return value
+        (@invoke [$rr_entry:ident] $name:ident($store:ident, $instance:ident,) $($pname:ident)*) => ({
+            #[cfg(not(feature = "rr-component"))]
+            {
+                shims!(@invoke $name($store, $instance,) $($pname)*)
+            }
+            #[cfg(feature = "rr-component")]
+            {
+                if let Some(_buf) = (*$store).replay_buffer_mut() {
+                    // Just perform replay validation, if required
+                    #[cfg(feature = "rr-validate")]
+                    _buf.next_event_validation::<BuiltinEntryEvent, _>(&$rr_entry{ $($pname),* }.into()).unwrap();
+                } else {
+                    // Record entry only; return is not present
+                    #[cfg(feature = "rr-validate")]
+                    (*$store).record_event_validation::<BuiltinEntryEvent, _>(|| $rr_entry{ $($pname),* }.into()).unwrap();
+                    shims!(@invoke $name($store, $instance,) $($pname)*)
+                }
+            }
+        });
+
+
 
     }
 

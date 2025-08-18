@@ -140,19 +140,16 @@ macro_rules! builtin_events {
     (
         $(
             $( #[cfg($attr:meta)] )?
-            $( #[rr_builtin(entry = $rr_entry:ident, exit = $rr_return:ident, variant = $rr_var:ident $(, success_ty = $rr_succ:tt)?)] )?
+            $( #[rr_builtin(variant = $rr_var:ident, entry = $rr_entry:ident $(, exit = $rr_return:ident)? $(, success_ty = $rr_succ:tt)?)] )?
             $name:ident( vmctx: vmctx $(, $pname:ident: $param:ident )* ) $( -> $result:ident )?;
         )*
     ) => (
-        builtin_events!(@gen_return_enum $($($rr_var $rr_return)?)*);
+        builtin_events!(@gen_return_enum $($($($rr_var $rr_return)?)?)*);
         builtin_events!(@gen_entry_enum $($($rr_var $rr_entry)?)*);
         // Prioitize ret_succ if provided
         $(
-            builtin_events!(@gen_events
-                $($rr_entry $rr_return)?
-                $($pname, $param)*
-                -> $($($rr_succ)?)? $($result)?
-            );
+            builtin_events!(@gen_entry_events $($rr_entry)? $($pname, $param)*);
+            builtin_events!(@gen_return_events $($($rr_return)?)? -> $($($rr_succ)?)? $($result)?);
         )*
     );
 
@@ -176,13 +173,16 @@ macro_rules! builtin_events {
     };
 
 
-    // Generate entry/exit events if rr_builtin provided
-    (@gen_events $rr_entry:ident $rr_return:ident $($pname:ident, $param:ident)* -> $($result_opts:tt)*) => {
+    (@gen_entry_events $rr_entry:ident $($pname:ident, $param:ident)*) => {
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         pub struct $rr_entry {
             $(pub $pname: $param),*
         }
+    };
+    // Stubbed if `rr_builtin` not provided
+    (@gen_entry_events $($pname:ident, $param:ident)*) => {};
 
+    (@gen_return_events $rr_return:ident -> $($result_opts:tt)*) => {
         #[derive(Debug, Clone, Serialize, Deserialize)]
         pub struct $rr_return(Result<builtin_events!(@ret_first $($result_opts)*), EventActionError>);
 
@@ -198,9 +198,9 @@ macro_rules! builtin_events {
                 self.0.map_err(|e| e.into())
             }
         }
-
     };
-
+    // Stubbed if `rr_builtin` not provided
+    (@gen_return_events -> $($result_opts:tt)*) => {};
 
     // Conversion to/from specific return `$event` and `BuiltinEntryEvent`
     (@from_impls $enum:ident $($rr_var:ident $event:ident)*) => {
@@ -226,13 +226,8 @@ macro_rules! builtin_events {
         )*
     };
 
-    // Return first value if it exists
+    // Return first value
     (@ret_first $first:tt $($rest:tt)*) => ($first);
-    (@ret_first ) => ();
-
-
-    // Stubbed if `rr_builtin` not provided
-    (@gen_events $($pname:ident, $param:ident)* -> $($result_opts:ident)*) => {};
 }
 
 // Return events with anyhow error conversion to EventActionError

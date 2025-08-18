@@ -84,17 +84,17 @@ macro_rules! foreach_builtin_component_function {
     ($mac:ident) => {
         $mac! {
             #[rr_builtin(
+                variant = ResourceNew32,
                 entry = ResourceNew32EntryEvent,
                 exit = ResourceNew32ReturnEvent,
-                variant = ResourceNew32,
                 success_ty = u32
             )]
             resource_new32(vmctx: vmctx, resource: u32, rep: u32) -> u64;
 
             #[rr_builtin(
+                variant = ResourceRep32,
                 entry = ResourceRep32EntryEvent,
                 exit = ResourceRep32ReturnEvent,
-                variant = ResourceRep32,
                 success_ty = u32
             )]
             resource_rep32(vmctx: vmctx, resource: u32, idx: u32) -> u64;
@@ -104,41 +104,39 @@ macro_rules! foreach_builtin_component_function {
             // is encoded as a 64-bit integer where the low bit is Some/None
             // and bits 1-33 are the payload.
             #[rr_builtin(
+                variant = ResourceDrop,
                 entry = ResourceDropEntryEvent,
                 exit = ResourceDropReturnEvent,
-                variant = ResourceDrop,
                 success_ty = ResourceDropRet
             )]
             resource_drop(vmctx: vmctx, resource: u32, idx: u32) -> u64;
 
             #[rr_builtin(
+                variant = ResourceTransferOwn,
                 entry = ResourceTransferOwnEntryEvent,
                 exit = ResourceTransferOwnReturnEvent,
-                variant = ResourceTransferOwn,
                 success_ty = u32
             )]
             resource_transfer_own(vmctx: vmctx, src_idx: u32, src_table: u32, dst_table: u32) -> u64;
 
             #[rr_builtin(
+                variant = ResourceTransferBorrow,
                 entry = ResourceTransferBorrowEntryEvent,
                 exit = ResourceTransferBorrowReturnEvent,
-                variant = ResourceTransferBorrow,
                 success_ty = u32
             )]
             resource_transfer_borrow(vmctx: vmctx, src_idx: u32, src_table: u32, dst_table: u32) -> u64;
 
-            //#[rr_builtin(
-            //    entry = ResourceEnterCallEntryEvent,
-            //    exit = ResourceEnterCallReturnEvent,
-            //    variant = ResourceEnterCall,
-            //    success_ty = ()
-            //)]
+            #[rr_builtin(
+                variant = ResourceEnterCall,
+                entry = ResourceEnterCallEntryEvent
+            )]
             resource_enter_call(vmctx: vmctx);
 
             #[rr_builtin(
+                variant = ResourceExitCall,
                 entry = ResourceExitCallEntryEvent,
                 exit = ResourceExitCallReturnEvent,
-                variant = ResourceExitCall,
                 success_ty = ()
             )]
             resource_exit_call(vmctx: vmctx) -> bool;
