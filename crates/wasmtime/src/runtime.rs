@@ -49,6 +49,7 @@ pub(crate) mod memory;
 pub(crate) mod module;
 pub(crate) mod resources;
 pub(crate) mod rr;
+pub(crate) mod rr_hooks;
 pub(crate) mod store;
 pub(crate) mod trampoline;
 pub(crate) mod trap;

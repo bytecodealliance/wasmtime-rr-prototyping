@@ -5,11 +5,11 @@ use crate::component::matching::InstanceType;
 use crate::component::storage::{slice_to_storage_mut, storage_as_slice_mut};
 use crate::component::{ComponentNamedList, ComponentType, Instance, Lift, Lower, Val};
 use crate::prelude::*;
+use crate::rr_hooks;
 use crate::runtime::vm::component::{
     ComponentInstance, VMComponentContext, VMLowering, VMLoweringCallee,
 };
 use crate::runtime::vm::{SendSyncPtr, VMOpaqueContext, VMStore};
-use crate::store::StoreOpaque;
 use crate::{AsContextMut, CallHook, StoreContextMut, ValRaw};
 use alloc::sync::Arc;
 use core::any::Any;
@@ -17,99 +17,10 @@ use core::future::Future;
 use core::mem::{self, MaybeUninit};
 use core::pin::Pin;
 use core::ptr::NonNull;
-use wasmtime_environ::component::TypeFunc;
 use wasmtime_environ::component::{
     CanonicalAbiInfo, ComponentTypes, InterfaceType, MAX_FLAT_ASYNC_PARAMS, MAX_FLAT_PARAMS,
     MAX_FLAT_RESULTS, OptionsIndex, TypeFuncIndex, TypeTuple,
 };
-
-/// Convenience methods to inject record + replay logic
-mod rr_hooks {
-    use super::*;
-    #[cfg(feature = "rr-component")]
-    use crate::rr::component_events::{
-        HostFuncReturnEvent, LowerReturnEvent, LowerStoreReturnEvent,
-    };
-    /// Record/replay hook operation for host function entry events
-    #[inline]
-    pub fn record_replay_host_func_entry(
-        args: &mut [MaybeUninit<ValRaw>],
-        func_type: &TypeFunc,
-        store: &mut StoreOpaque,
-    ) -> Result<()> {
-        #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
-        {
-            use crate::rr::component_events::HostFuncEntryEvent;
-            store.record_event_validation(|| HostFuncEntryEvent::new(args, func_type.clone()))?;
-            store.next_replay_event_validation::<HostFuncEntryEvent, _>(func_type)?;
-        }
-        let _ = (args, func_type, store);
-        Ok(())
-    }
-
-    /// Record hook operation for host function return events
-    #[inline]
-    pub fn record_host_func_return(
-        args: &[MaybeUninit<ValRaw>],
-        store: &mut StoreOpaque,
-    ) -> Result<()> {
-        #[cfg(feature = "rr-component")]
-        store.record_event(|| HostFuncReturnEvent::new(args))?;
-        let _ = (args, store);
-        Ok(())
-    }
-
-    /// Record hook wrapping a lowering `store` call of component types
-    #[inline]
-    pub fn record_lower_store<F, T>(
-        lower_store: F,
-        cx: &mut LowerContext<'_, T>,
-        ty: InterfaceType,
-        offset: usize,
-    ) -> Result<()>
-    where
-        F: FnOnce(&mut LowerContext<'_, T>, InterfaceType, usize) -> Result<()>,
-    {
-        #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
-        {
-            use crate::rr::component_events::LowerStoreEntryEvent;
-            cx.store
-                .0
-                .record_event_validation(|| LowerStoreEntryEvent { ty, offset })?;
-        }
-        let store_result = lower_store(cx, ty, offset);
-        #[cfg(feature = "rr-component")]
-        cx.store
-            .0
-            .record_event(|| LowerStoreReturnEvent::from_anyhow_result(&store_result))?;
-        store_result
-    }
-
-    /// Record hook wrapping a lowering `lower` call of component types
-    #[inline]
-    pub fn record_lower<F, T>(
-        lower: F,
-        cx: &mut LowerContext<'_, T>,
-        ty: InterfaceType,
-    ) -> Result<()>
-    where
-        F: FnOnce(&mut LowerContext<'_, T>, InterfaceType) -> Result<()>,
-    {
-        #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
-        {
-            use crate::rr::component_events::LowerEntryEvent;
-            cx.store
-                .0
-                .record_event_validation(|| LowerEntryEvent { ty })?;
-        }
-        let lower_result = lower(cx, ty);
-        #[cfg(feature = "rr-component")]
-        cx.store
-            .0
-            .record_event(|| LowerReturnEvent::from_anyhow_result(&lower_result))?;
-        lower_result
-    }
-}
 
 pub struct HostFunc {
     entrypoint: VMLoweringCallee,
@@ -347,7 +258,7 @@ where
     let param_tys = InterfaceType::Tuple(ty.params);
     let result_tys = InterfaceType::Tuple(ty.results);
 
-    rr_hooks::record_replay_host_func_entry(storage, &ty, store.0)?;
+    rr_hooks::component::record_replay_host_func_entry(storage, &ty, store.0)?;
 
     let storage_type = if async_ {
         #[cfg(feature = "component-model-async")]
@@ -707,12 +618,12 @@ where
         ) -> Result<()> {
             match self.lower_dst() {
                 Dst::Direct(storage) => {
-                    let result = rr_hooks::record_lower(
+                    let result = rr_hooks::component::record_lower(
                         |cx, ty| ret.linear_lower_to_flat(cx, ty, storage),
                         cx,
                         ty,
                     );
-                    rr_hooks::record_host_func_return(
+                    rr_hooks::component::record_host_func_return(
                         unsafe { storage_as_slice_mut(storage) },
                         cx.store.0,
                     )?;
@@ -720,14 +631,14 @@ where
                 }
                 Dst::Indirect(ptr) => {
                     let ptr = validate_inbounds::<R>(cx.as_slice(), ptr)?;
-                    let result = rr_hooks::record_lower_store(
+                    let result = rr_hooks::component::record_lower_store(
                         |cx, ty, ptr| ret.linear_lower_to_memory(cx, ty, ptr),
                         cx,
                         ty,
                         ptr,
                     );
                     // Recording here is just for marking the return event
-                    rr_hooks::record_host_func_return(&[], cx.store.0)?;
+                    rr_hooks::component::record_host_func_return(&[], cx.store.0)?;
                     result
                 }
             }
@@ -897,7 +808,7 @@ where
     let param_tys = &types[func_ty.params];
     let result_tys = &types[func_ty.results];
 
-    rr_hooks::record_replay_host_func_entry(storage, &types[ty], store.0)?;
+    rr_hooks::component::record_replay_host_func_entry(storage, &types[ty], store.0)?;
 
     if !store.0.replay_enabled() {
         let mut params_and_results = Vec::new();
@@ -1006,16 +917,27 @@ where
             if let Some(cnt) = result_tys.abi.flat_count(MAX_FLAT_RESULTS) {
                 let mut dst = storage[..cnt].iter_mut();
                 for (val, ty) in result_vals.iter().zip(result_tys.types.iter()) {
-                    rr_hooks::record_lower(|cx, ty| val.lower(cx, ty, &mut dst), &mut cx, *ty)?;
+                    rr_hooks::component::record_lower(
+                        |cx, ty| val.lower(cx, ty, &mut dst),
+                        &mut cx,
+                        *ty,
+                    )?;
                 }
                 assert!(dst.next().is_none());
-                rr_hooks::record_host_func_return(storage, cx.store.0)?;
+                rr_hooks::component::record_host_func_return(storage, cx.store.0)?;
             } else {
                 let ret_ptr = unsafe { storage[ret_index].assume_init_ref() };
                 let mut ptr = validate_inbounds_dynamic(&result_tys.abi, cx.as_slice(), ret_ptr)?;
                 for (val, ty) in result_vals.iter().zip(result_tys.types.iter()) {
                     let offset = types.canonical_abi(ty).next_field32_size(&mut ptr);
-                    val.store(&mut cx, *ty, offset)?;
+                    rr_hooks::component::record_lower_store(
+                        |cx, ty, ptr| val.store(cx, ty, ptr),
+                        &mut cx,
+                        *ty,
+                        offset,
+                    )?;
+                    // Recording here is just for marking the return event
+                    rr_hooks::component::record_host_func_return(&[], cx.store.0)?;
                 }
             }
 
