@@ -157,5 +157,6 @@ pub mod marker_events {
     }
 }
 
+pub mod common_events;
 pub mod component_events;
 pub mod core_events;

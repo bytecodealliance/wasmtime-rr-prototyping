@@ -689,7 +689,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
             #[cfg(feature = "rr-validate")]
             let run_validate = buf.settings().validate && buf.trace_settings().add_validation;
             match event {
-                RREvent::ComponentHostFuncReturn(e) => {
+                RREvent::HostFuncReturn(e) => {
                     // End of the lowering process
                     if let Some(e) = lowering_error {
                         return Err(e.into());

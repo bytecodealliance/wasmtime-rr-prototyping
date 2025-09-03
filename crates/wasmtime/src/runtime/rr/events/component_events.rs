@@ -3,6 +3,8 @@
 use super::*;
 use crate::component::Component;
 use crate::vm::component::libcalls::ResourceDropRet;
+// Re-export common events from this module
+pub use common_events::*;
 use wasmtime_environ::{self, component::InterfaceType, component::TypeFunc};
 
 /// A [`Component`] instantiatation event
@@ -51,27 +53,6 @@ impl Validate<TypeFunc> for HostFuncEntryEvent {
         } else {
             Err(ReplayError::FailedValidation)
         }
-    }
-}
-
-/// A return event after a host call for a Wasm component
-///
-/// Matches 1:1 with [`HostFuncEntryEvent`]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostFuncReturnEvent {
-    /// Lowered values passed across the call return boundary
-    args: RRFuncArgVals,
-}
-impl HostFuncReturnEvent {
-    pub fn new(args: &[MaybeUninit<ValRaw>]) -> Self {
-        Self {
-            args: func_argvals_from_raw_slice(args),
-        }
-    }
-
-    /// Consume the caller event and encode it back into the slice
-    pub fn move_into_slice(self, args: &mut [MaybeUninit<ValRaw>]) {
-        func_argvals_into_raw_slice(self.args, args);
     }
 }
 

@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 // it for other modules only when enabled
 #[cfg(any(feature = "rr-validate", feature = "rr-component"))]
 pub use events::Validate;
-use events::component_events as __component_events;
 #[cfg(feature = "rr-component")]
 pub use events::component_events;
+use events::{common_events, component_events as __component_events};
 pub use events::{core_events, marker_events};
 pub use io::{RecordWriter, ReplayReader};
 
@@ -91,17 +91,17 @@ rr_event! {
     /// A custom message
     CustomMessage(marker_events::CustomMessageEvent),
 
+    // Common events for both core or component wasm
+    /// Return from host function to either Core Wasm or component
+    HostFuncReturn(common_events::HostFuncReturnEvent),
+
     /// Call into host function from Core Wasm
     CoreHostFuncEntry(core_events::HostFuncEntryEvent),
-    /// Return from host function to Core Wasm
-    CoreHostFuncReturn(core_events::HostFuncReturnEvent),
 
     // REQUIRED events for replay
-    //
+
     /// Instantiation of a component
     ComponentInstantiation(__component_events::InstantiationEvent),
-    /// Return from host function to component
-    ComponentHostFuncReturn(__component_events::HostFuncReturnEvent),
     /// Component ABI realloc call in linear wasm memory
     ComponentReallocEntry(__component_events::ReallocEntryEvent),
     /// Return from a type lowering operation
@@ -117,6 +117,7 @@ rr_event! {
     //
     // ReallocReturn is optional because we can assume the realloc is deterministic
     // and the error message is subsumed by the containing LowerReturn/LowerStoreReturn
+
     /// Return from Component ABI realloc call
     ComponentReallocReturn(__component_events::ReallocReturnEvent),
     /// Call into host function from component
