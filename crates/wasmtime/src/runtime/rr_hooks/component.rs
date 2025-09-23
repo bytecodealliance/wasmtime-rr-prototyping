@@ -5,7 +5,7 @@ use crate::prelude::*;
 use crate::store::StoreOpaque;
 use core::mem::MaybeUninit;
 #[cfg(feature = "component-model")]
-use wasmtime_environ::component::{InterfaceType, TypeFunc};
+use wasmtime_environ::component::{InterfaceType, TypeFuncIndex};
 
 #[cfg(feature = "rr-component")]
 use crate::rr::component_events::{HostFuncReturnEvent, LowerReturnEvent, LowerStoreReturnEvent};
@@ -14,16 +14,16 @@ use crate::rr::component_events::{HostFuncReturnEvent, LowerReturnEvent, LowerSt
 #[inline]
 pub fn record_replay_host_func_entry(
     args: &mut [MaybeUninit<ValRaw>],
-    func_type: &TypeFunc,
+    func_idx: &TypeFuncIndex,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
     {
         use crate::rr::component_events::HostFuncEntryEvent;
-        store.record_event_validation(|| HostFuncEntryEvent::new(args, func_type.clone()))?;
-        store.next_replay_event_validation::<HostFuncEntryEvent, _>(func_type)?;
+        store.record_event_validation(|| HostFuncEntryEvent::new(args, func_idx.clone()))?;
+        store.next_replay_event_validation::<HostFuncEntryEvent, _>(func_idx)?;
     }
-    let _ = (args, func_type, store);
+    let _ = (args, func_idx, store);
     Ok(())
 }
 

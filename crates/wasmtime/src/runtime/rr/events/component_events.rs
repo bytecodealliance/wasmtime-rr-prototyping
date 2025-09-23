@@ -5,7 +5,7 @@ use crate::component::Component;
 use crate::vm::component::libcalls::ResourceDropRet;
 // Re-export common events from this module
 pub use common_events::*;
-use wasmtime_environ::{self, component::InterfaceType, component::TypeFunc};
+use wasmtime_environ::{self, component::InterfaceType, component::TypeFuncIndex};
 
 /// A [`Component`] instantiatation event
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,27 +28,27 @@ pub struct HostFuncEntryEvent {
     /// Raw values passed across the call entry boundary
     args: RRFuncArgVals,
 
-    /// Param/return types (required to support replay validation).
+    /// Function index (required to support replay validation).
     ///
     /// Note: This relies on the invariant that [InterfaceType] will always be
     /// deterministic. Currently, the type indices into various [ComponentTypes]
     /// maintain this, allowing for quick type-checking.
-    types: TypeFunc,
+    ty: TypeFuncIndex,
 }
 impl HostFuncEntryEvent {
     // Record
-    pub fn new(args: &[MaybeUninit<ValRaw>], types: TypeFunc) -> Self {
+    pub fn new(args: &[MaybeUninit<ValRaw>], ty: TypeFuncIndex) -> Self {
         Self {
             args: func_argvals_from_raw_slice(args),
-            types: types,
+            ty: ty,
         }
     }
 }
 #[cfg(feature = "rr-validate")]
-impl Validate<TypeFunc> for HostFuncEntryEvent {
-    fn validate(&self, expect_types: &TypeFunc) -> Result<(), ReplayError> {
+impl Validate<TypeFuncIndex> for HostFuncEntryEvent {
+    fn validate(&self, expect_ty: &TypeFuncIndex) -> Result<(), ReplayError> {
         self.log();
-        if &self.types == expect_types {
+        if &self.ty == expect_ty {
             Ok(())
         } else {
             Err(ReplayError::FailedValidation)

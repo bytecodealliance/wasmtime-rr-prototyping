@@ -254,11 +254,12 @@ where
     }
 
     let types = vminstance.component().types().clone();
+
+    rr_hooks::component::record_replay_host_func_entry(storage, &ty, store.0)?;
+
     let ty = &types[ty];
     let param_tys = InterfaceType::Tuple(ty.params);
     let result_tys = InterfaceType::Tuple(ty.results);
-
-    rr_hooks::component::record_replay_host_func_entry(storage, &ty, store.0)?;
 
     let storage_type = if async_ {
         #[cfg(feature = "component-model-async")]
@@ -804,11 +805,12 @@ where
     }
 
     let types = instance.id().get(store.0).component().types().clone();
+
+    rr_hooks::component::record_replay_host_func_entry(storage, &ty, store.0)?;
+
     let func_ty = &types[ty];
     let param_tys = &types[func_ty.params];
     let result_tys = &types[func_ty.results];
-
-    rr_hooks::component::record_replay_host_func_entry(storage, &types[ty], store.0)?;
 
     if !store.0.replay_enabled() {
         let mut params_and_results = Vec::new();
