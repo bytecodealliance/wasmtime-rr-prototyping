@@ -5,7 +5,10 @@ use crate::component::Component;
 use crate::vm::component::libcalls::ResourceDropRet;
 // Re-export common events from this module
 pub use common_events::*;
-use wasmtime_environ::{self, component::InterfaceType, component::TypeFuncIndex};
+use wasmtime_environ::{
+    self,
+    component::{ExportIndex, InterfaceType, TypeFuncIndex},
+};
 
 /// A [`Component`] instantiatation event
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,6 +22,31 @@ impl InstantiationEvent {
         Self {
             checksum: *component.checksum(),
         }
+    }
+}
+
+/// A call event from Host into a Wasm component function
+///
+/// Note: Could potential merge with [`HostFuncReturnEvent`] as [`WasmToHostEvent`]?
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmFuncEntryEvent {
+    /// Raw values passed across call boundary
+    args: RRFuncArgVals,
+    func_idx: ExportIndex,
+}
+impl WasmFuncEntryEvent {
+    // Record
+    pub fn new(args: &[ValRaw], func_idx: ExportIndex) -> Self {
+        Self {
+            args: func_argvals_from_raw_slice(args),
+            func_idx,
+        }
+    }
+
+    // Replay
+    /// Consume the caller event and encode it back into the slice
+    pub fn move_into_slice(self, args: &mut [MaybeUninit<ValRaw>]) {
+        func_argvals_into_raw_slice(self.args, args);
     }
 }
 
@@ -67,15 +95,15 @@ pub struct ReallocEntryEvent {
     pub new_size: usize,
 }
 
-/// Entry to a type lowering invocation
+/// Entry to a type lowering invocation to flat destination
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LowerEntryEvent {
+pub struct LowerFlatEntryEvent {
     pub ty: InterfaceType,
 }
 
-/// Entry to store invocations during type lowering
+/// Entry to type lowering invocation to destination in memory
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LowerStoreEntryEvent {
+pub struct LowerMemoryEntryEvent {
     pub ty: InterfaceType,
     pub offset: usize,
 }
@@ -95,24 +123,53 @@ pub struct MemorySliceWriteEvent {
 macro_rules! generic_new_result_events {
     (
         $(
-            $(#[doc = $doc:literal])*
+            $(#[$meta:meta])*
             $event:ident -> ($ok_ty:ty,$err_variant:path)
         ),*
     ) => (
         $(
-            $(#[doc = $doc])*
+            $(#[$meta])*
             #[derive(Debug, Clone, Serialize, Deserialize)]
             pub struct $event(Result<$ok_ty, EventActionError>);
 
             impl $event {
                 pub fn from_anyhow_result(ret: &Result<$ok_ty>) -> Self {
-                    Self(ret.as_ref().map(|t| *t).map_err(|e| $err_variant(e.to_string())))
+                    Self(ret.as_ref().map(|t| (*t).clone()).map_err(|e| $err_variant(e.to_string())))
                 }
                 pub fn ret(self) -> Result<$ok_ty, EventActionError> { self.0 }
             }
 
+            generic_new_result_events!(@validate_impl $event,$ok_ty,$err_variant);
         )*
     );
+
+    (@validate_impl $event:ident,$ok_ty:ty,$err_variant:path) => {
+        #[cfg(feature = "rr-validate")]
+        impl Validate<Result<$ok_ty>> for $event {
+            /// We can check that realloc is deterministic (as expected by the engine)
+            fn validate(&self, expect_ret: &Result<$ok_ty>) -> Result<(), ReplayError> {
+                self.log();
+                // Cannot just use eq since anyhow::Error and EventActionError cannot be compared
+                match (self.0.as_ref(), expect_ret.as_ref()) {
+                    (Ok(r), Ok(s)) => {
+                        if r == s {
+                            Ok(())
+                        } else {
+                            Err(ReplayError::FailedValidation)
+                        }
+                    }
+                    // Return the recorded error
+                    (Err(e), Err(f)) => Err(ReplayError::from($err_variant(format!(
+                        "Replayed Error for {}: {} \nRecorded Error for {}: {}",
+                        stringify!($event), e, stringify!($event), f
+                    )))),
+                    // Diverging errors.. Report as a failed validation
+                    (Ok(_), Err(_)) => Err(ReplayError::FailedValidation),
+                    (Err(_), Ok(_)) => Err(ReplayError::FailedValidation),
+                }
+            }
+        }
+    };
 }
 
 // Macro to generate RR events from the builtin descriptions
@@ -215,10 +272,16 @@ macro_rules! builtin_events {
 generic_new_result_events! {
     /// Return from a reallocation call (needed only for validation)
     ReallocReturnEvent -> (usize, EventActionError::ReallocError),
-    /// Return from a type lowering invocation
-    LowerReturnEvent -> ((), EventActionError::LowerError),
-    /// Return from store invocations during type lowering
-    LowerStoreReturnEvent -> ((), EventActionError::LowerStoreError)
+    /// Return from type lowering to flat destination
+    LowerFlatReturnEvent -> ((), EventActionError::LowerFlatError),
+    /// Return from type lowering to destination in memory
+    LowerMemoryReturnEvent -> ((), EventActionError::LowerMemoryError),
+    /// A return event from a Wasm component function to Host
+    ///
+    /// Matches 1:1 with [`WasmFuncEntryEvent`].
+    ///
+    /// Note: Could potential merge with [`HostFuncEntryEvent`] as [`HostToWasmEvent`]?
+    WasmFuncReturnEvent -> (RRFuncArgVals, EventActionError::WasmFuncReturnError)
 }
 
 // Entry/return events for each builtin function
@@ -227,28 +290,3 @@ wasmtime_environ::foreach_builtin_component_function!(builtin_events);
 // === Special Validation ===
 // `realloc` needs to actually check for divergence
 // between recorded and replayed realloc effects
-#[cfg(feature = "rr-validate")]
-impl Validate<Result<usize>> for ReallocReturnEvent {
-    /// We can check that realloc is deterministic (as expected by the engine)
-    fn validate(&self, expect_ret: &Result<usize>) -> Result<(), ReplayError> {
-        self.log();
-        // Cannot just use eq since anyhow::Error and EventActionError cannot be compared
-        match (self.0.as_ref(), expect_ret.as_ref()) {
-            (Ok(r), Ok(s)) => {
-                if r == s {
-                    Ok(())
-                } else {
-                    Err(ReplayError::FailedValidation)
-                }
-            }
-            // Return the recorded error
-            (Err(e), Err(f)) => Err(ReplayError::from(EventActionError::ReallocError(format!(
-                "Replayed Realloc Error: {} \nRecorded Realloc Error: {}",
-                e, f
-            )))),
-            // Diverging errors.. Report as a failed validation
-            (Ok(_), Err(_)) => Err(ReplayError::FailedValidation),
-            (Err(_), Ok(_)) => Err(ReplayError::FailedValidation),
-        }
-    }
-}

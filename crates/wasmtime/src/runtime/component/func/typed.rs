@@ -3,6 +3,7 @@ use crate::component::func::{Func, LiftContext, LowerContext, Options};
 use crate::component::matching::InstanceType;
 use crate::component::storage::{storage_as_slice, storage_as_slice_mut};
 use crate::prelude::*;
+use crate::rr_hooks::component_hooks;
 use crate::{AsContextMut, StoreContext, StoreContextMut, ValRaw};
 use alloc::borrow::Cow;
 use core::fmt;
@@ -454,7 +455,19 @@ where
         dst: &mut MaybeUninit<Params::Lower>,
     ) -> Result<()> {
         assert!(Params::flatten_count() <= MAX_FLAT_PARAMS);
-        params.linear_lower_to_flat(cx, ty, dst)?;
+        if cx.store.0.replay_enabled() {
+            #[cfg(feature = "rr-component")]
+            cx.replay_lowering(
+                Some(unsafe { storage_as_slice_mut(dst) }),
+                component_hooks::ReplayLoweringPhase::WasmFuncEntry,
+            )?
+        } else {
+            component_hooks::record_lower_flat(
+                |cx, ty| params.linear_lower_to_flat(cx, ty, dst),
+                cx,
+                ty,
+            )?;
+        }
         Ok(())
     }
 
@@ -478,7 +491,18 @@ where
         // Note that `realloc` will bake in a check that the returned pointer is
         // in-bounds.
         let ptr = cx.realloc(0, 0, Params::ALIGN32, Params::SIZE32)?;
-        params.linear_lower_to_memory(cx, ty, ptr)?;
+
+        if cx.store.0.replay_enabled() {
+            #[cfg(feature = "rr-component")]
+            cx.replay_lowering(None, component_hooks::ReplayLoweringPhase::WasmFuncEntry)?
+        } else {
+            component_hooks::record_lower_memory(
+                |cx, ty, ptr| params.linear_lower_to_memory(cx, ty, ptr),
+                cx,
+                ty,
+                ptr,
+            )?;
+        }
 
         // Note that the pointer here is stored as a 64-bit integer. This allows
         // this to work with either 32 or 64-bit memories. For a 32-bit memory

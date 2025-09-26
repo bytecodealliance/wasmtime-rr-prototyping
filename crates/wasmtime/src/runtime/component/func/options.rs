@@ -6,11 +6,13 @@ use crate::component::{Instance, ResourceType};
 use crate::prelude::*;
 #[cfg(feature = "rr-component")]
 use crate::rr::{
-    RREvent, RecordBuffer, Recorder, ReplayError, Replayer,
-    component_events::MemorySliceWriteEvent, component_events::ReallocEntryEvent,
+    RREvent, RecordBuffer, ReplayError, Replayer, component_events::ReallocEntryEvent,
 };
 #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
 use crate::rr::{Validate, component_events::ReallocReturnEvent};
+#[cfg(feature = "rr-component")]
+use crate::rr_hooks::component_hooks::ReplayLoweringPhase;
+use crate::rr_hooks::{ConstMemorySliceCell, MemorySliceCell};
 use crate::runtime::vm::component::{
     CallContexts, ComponentInstance, InstanceFlags, ResourceTable, ResourceTables,
 };
@@ -20,112 +22,12 @@ use crate::{FuncType, StoreContextMut};
 use alloc::sync::Arc;
 #[cfg(feature = "rr-component")]
 use core::mem::MaybeUninit;
-use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use wasmtime_environ::component::{
     CanonicalOptions, CanonicalOptionsDataModel, ComponentTypes, OptionsIndex, StringEncoding,
     TypeResourceTableIndex,
 };
-
-/// Same as [`ConstMemorySliceCell`] except allows for dynamically sized slices.
-///
-/// Prefer the above for efficiency if slice size is known statically.
-///
-/// **Note**: The correct operation of this type relies of several invariants.
-/// See [`ConstMemorySliceCell`] for detailed description on the role
-/// of these types.
-pub struct MemorySliceCell<'a> {
-    bytes: &'a mut [u8],
-    #[cfg(feature = "rr-component")]
-    offset: usize,
-    #[cfg(feature = "rr-component")]
-    recorder: Option<&'a mut RecordBuffer>,
-}
-impl<'a> Deref for MemorySliceCell<'a> {
-    type Target = [u8];
-    fn deref(&self) -> &Self::Target {
-        self.bytes
-    }
-}
-impl DerefMut for MemorySliceCell<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.bytes
-    }
-}
-impl Drop for MemorySliceCell<'_> {
-    /// Drop serves as a recording hook for stores to the memory slice
-    fn drop(&mut self) {
-        #[cfg(feature = "rr-component")]
-        if let Some(buf) = &mut self.recorder {
-            buf.record_event(|| MemorySliceWriteEvent {
-                offset: self.offset,
-                bytes: self.bytes.to_vec(),
-            })
-            .unwrap();
-        }
-    }
-}
-
-/// Zero-cost encapsulation type for a statically sized slice of mutable memory
-///
-/// # Purpose and Usage (Read Carefully!)
-///
-/// This type (and its dynamic counterpart [`MemorySliceCell`]) are critical to
-/// record/replay (RR) support in Wasmtime. In practice, all lowering operations utilize
-/// a [`LowerContext`], which provides a capability to modify guest Wasm module state in
-/// the following ways:
-///
-/// 1. Write to slices of memory with [`get`](LowerContext::get)/[`get_dyn`](LowerContext::get_dyn)
-/// 2. Movement of memory with [`realloc`](LowerContext::realloc)
-///
-/// The above are intended to be the narrow waists for recording changes to guest state, and
-/// should be the **only** interfaces used during lowerng. In particular,
-/// [`get`](LowerContext::get)/[`get_dyn`](LowerContext::get_dyn) return
-/// ([`ConstMemorySliceCell`]/[`MemorySliceCell`]), which implement [`Drop`]
-/// allowing us a hook to just capture the final aggregate changes made to guest memory by the host.
-///
-/// ## Critical Invariants
-///
-/// Typically recording would need to know both when the slice was borrowed AND when it was
-/// dropped, since memory movement with [`realloc`](LowerContext::realloc) can be interleaved between
-/// borrows and drops, and replays would have to be aware of this. **However**, with this abstraction,
-/// we can be more efficient and get away with **only** recording drops, because of the implicit interaction between
-/// [`realloc`](LowerContext::realloc) and [`get`](LowerContext::get)/[`get_dyn`](LowerContext::get_dyn),
-/// which both take a `&mut self`. Since the latter implements [`Drop`], which also takes a `&mut self`,
-/// the compiler will automatically enforce that drops of this type need to be triggered before a
-/// [`realloc`](LowerContext::realloc), preventing any interleavings in between the borrow and drop of the slice.
-pub struct ConstMemorySliceCell<'a, const N: usize> {
-    bytes: &'a mut [u8; N],
-    #[cfg(feature = "rr-component")]
-    offset: usize,
-    #[cfg(feature = "rr-component")]
-    recorder: Option<&'a mut RecordBuffer>,
-}
-impl<'a, const N: usize> Deref for ConstMemorySliceCell<'a, N> {
-    type Target = [u8; N];
-    fn deref(&self) -> &Self::Target {
-        self.bytes
-    }
-}
-impl<'a, const N: usize> DerefMut for ConstMemorySliceCell<'a, N> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.bytes
-    }
-}
-impl<'a, const N: usize> Drop for ConstMemorySliceCell<'a, N> {
-    /// Drops serves as a recording hook for stores to the memory slice
-    fn drop(&mut self) {
-        #[cfg(feature = "rr-component")]
-        if let Some(buf) = &mut self.recorder {
-            buf.record_event(|| MemorySliceWriteEvent {
-                offset: self.offset,
-                bytes: self.bytes.to_vec(),
-            })
-            .unwrap();
-        }
-    }
-}
 
 /// Runtime representation of canonical ABI options in the component model.
 ///
@@ -658,8 +560,10 @@ impl<'a, T: 'static> LowerContext<'a, T> {
 
     /// Perform a replay of all the type lowering-associated events for this context
     ///
-    /// These typically include all `Lower*` and `Realloc*` event, along with relevant
-    /// `HostFunctionReturnEvent`.
+    /// These typically include all `Lower*` and `Realloc*` event, along with the putting
+    /// the resulting value into storage (if provided) on the following termination conditions:
+    /// - `HostFunctionReturnEvent` when phase == HostFuncReturn
+    /// - `WasmFunctionEntryEvent` when phase == WasmFuncEntry
     ///
     /// ## Important Notes
     ///
@@ -669,6 +573,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     pub fn replay_lowering(
         &mut self,
         mut result_storage: Option<&mut [MaybeUninit<ValRaw>]>,
+        phase: ReplayLoweringPhase,
     ) -> Result<()> {
         // There is a lot of `rr-validate` feature gating here for optimal replay performance
         // and memory overhead in a non-validating scenario. If this proves to not produce a huge
@@ -690,7 +595,25 @@ impl<'a, T: 'static> LowerContext<'a, T> {
             let run_validate = buf.settings().validate && buf.trace_settings().add_validation;
             match event {
                 RREvent::HostFuncReturn(e) => {
-                    // End of the lowering process
+                    match phase {
+                        ReplayLoweringPhase::HostFuncReturn => {}
+                        _ => bail!("HostFuncReturn encountered in invalid phase"),
+                    }
+                    // End of the lowering process (for host calls)
+                    if let Some(e) = lowering_error {
+                        return Err(e.into());
+                    }
+                    if let Some(storage) = result_storage.as_deref_mut() {
+                        e.move_into_slice(storage);
+                    }
+                    complete = true;
+                }
+                RREvent::ComponentWasmFuncEntry(e) => {
+                    match phase {
+                        ReplayLoweringPhase::WasmFuncEntry => {}
+                        _ => bail!("WasmFuncEntry encountered in invalid phase"),
+                    }
+                    // End of the lowering process (for wasm calls)
                     if let Some(e) = lowering_error {
                         return Err(e.into());
                     }
@@ -708,14 +631,14 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                     }
                 }
                 // No return value to validate for lower/lower-store; store error and just check that entry happened before
-                RREvent::ComponentLowerReturn(e) => {
+                RREvent::ComponentLowerFlatReturn(e) => {
                     #[cfg(feature = "rr-validate")]
                     if run_validate {
                         _lower_stack.pop().ok_or(ReplayError::InvalidOrdering)?;
                     }
                     lowering_error = e.ret().map_err(Into::into).err();
                 }
-                RREvent::ComponentLowerStoreReturn(e) => {
+                RREvent::ComponentLowerMemoryReturn(e) => {
                     #[cfg(feature = "rr-validate")]
                     if run_validate {
                         _lower_store_stack
@@ -735,7 +658,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                 // Realloc or any lowering methods cannot call back to the host. Hence, you cannot
                 // have host calls entries during this method
                 RREvent::ComponentHostFuncEntry(_) => {
-                    bail!("Cannot call back into host during lowering")
+                    bail!("Cannot call into host during lowering")
                 }
                 // Unwrapping should never occur on valid executions since *Entry should be before *Return in trace
                 RREvent::ComponentReallocReturn(_e) =>
@@ -745,14 +668,14 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                         lowering_error = _e.validate(&_realloc_stack.pop().unwrap()).err()
                     }
                 }
-                RREvent::ComponentLowerEntry(_) => {
+                RREvent::ComponentLowerFlatEntry(_) => {
                     // All we want here is ensuring Entry occurs before Return
                     #[cfg(feature = "rr-validate")]
                     if run_validate {
                         _lower_stack.push(())
                     }
                 }
-                RREvent::ComponentLowerStoreEntry(_) => {
+                RREvent::ComponentLowerMemoryEntry(_) => {
                     // All we want here is ensuring Entry occurs before Return
                     #[cfg(feature = "rr-validate")]
                     if run_validate {

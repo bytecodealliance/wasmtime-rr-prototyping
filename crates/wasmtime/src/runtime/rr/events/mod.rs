@@ -19,18 +19,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventActionError {
     ReallocError(String),
-    LowerError(String),
-    LowerStoreError(String),
+    LowerFlatError(String),
+    LowerMemoryError(String),
     BuiltinError(String),
+    WasmFuncReturnError(String),
 }
 
 impl fmt::Display for EventActionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ReallocError(s)
-            | Self::LowerError(s)
-            | Self::LowerStoreError(s)
-            | Self::BuiltinError(s) => {
+            | Self::LowerFlatError(s)
+            | Self::LowerMemoryError(s)
+            | Self::BuiltinError(s)
+            | Self::WasmFuncReturnError(s) => {
                 write!(f, "{}", s)
             }
         }
@@ -47,7 +49,7 @@ type ValRawBytes = [u8; mem::size_of::<ValRaw>()];
 ///
 /// Essentially [`From`] and [`Into`] but local to the crate
 /// to bypass orphan rule for externally defined types
-trait ValRawBytesConvertable {
+pub trait ValRawBytesConvertable {
     fn to_valraw_bytes(self) -> ValRawBytes;
     fn from_valraw_bytes(value: ValRawBytes) -> Self;
 }
@@ -76,10 +78,10 @@ impl ValRawBytesConvertable for MaybeUninit<ValRaw> {
     }
 }
 
-type RRFuncArgVals = Vec<ValRawBytes>;
+pub type RRFuncArgVals = Vec<ValRawBytes>;
 
 /// Construct [`RRFuncArgVals`] from raw value buffer
-fn func_argvals_from_raw_slice<T>(args: &[T]) -> RRFuncArgVals
+pub fn func_argvals_from_raw_slice<T>(args: &[T]) -> RRFuncArgVals
 where
     T: ValRawBytesConvertable + Copy,
 {
@@ -98,10 +100,13 @@ where
 
 /// Trait signifying types that can be validated on replay
 ///
-/// All `PartialEq` and `Eq` types are directly validatable with themselves.
+/// All `PartialEq` types are directly validatable with themselves.
 /// Note however that some [`Validate`] implementations are present even
 /// when feature `rr-validate` is disabled, when validation is needed
 /// for a faithful replay (e.g. [`component_events::InstantiationEvent`]).
+///
+/// In terms of usage, an event that implements `Validate` can call
+/// any RR validation methods on a `Store`
 #[cfg(any(feature = "rr-component", feature = "rr-validate"))]
 pub trait Validate<T: ?Sized> {
     /// Perform a validation of the event to ensure replay consistency

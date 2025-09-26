@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 pub use events::Validate;
 #[cfg(feature = "rr-component")]
 pub use events::component_events;
+#[cfg(all(feature = "rr-validate", feature = "rr-component"))]
+pub use events::{RRFuncArgVals, func_argvals_from_raw_slice};
 use events::{common_events, component_events as __component_events};
 pub use events::{core_events, marker_events};
 pub use io::{RecordWriter, ReplayReader};
@@ -100,14 +102,16 @@ rr_event! {
 
     // REQUIRED events for replay
 
+    /// Call into a Wasm component function from host
+    ComponentWasmFuncEntry(__component_events::WasmFuncEntryEvent),
     /// Instantiation of a component
     ComponentInstantiation(__component_events::InstantiationEvent),
     /// Component ABI realloc call in linear wasm memory
     ComponentReallocEntry(__component_events::ReallocEntryEvent),
     /// Return from a type lowering operation
-    ComponentLowerReturn(__component_events::LowerReturnEvent),
+    ComponentLowerFlatReturn(__component_events::LowerFlatReturnEvent),
     /// Return from a store during a type lowering operation
-    ComponentLowerStoreReturn(__component_events::LowerStoreReturnEvent),
+    ComponentLowerMemoryReturn(__component_events::LowerMemoryReturnEvent),
     /// An attempt to obtain a mutable slice into Wasm linear memory
     ComponentMemorySliceWrite(__component_events::MemorySliceWriteEvent),
     /// Return from a component builtin
@@ -118,14 +122,16 @@ rr_event! {
     // ReallocReturn is optional because we can assume the realloc is deterministic
     // and the error message is subsumed by the containing LowerReturn/LowerStoreReturn
 
+    /// Return from a Wasm component function back to host
+    ComponentWasmFuncReturn(__component_events::WasmFuncReturnEvent),
     /// Return from Component ABI realloc call
     ComponentReallocReturn(__component_events::ReallocReturnEvent),
     /// Call into host function from component
     ComponentHostFuncEntry(__component_events::HostFuncEntryEvent),
-    /// Call into [Lower::lower] for type lowering
-    ComponentLowerEntry(__component_events::LowerEntryEvent),
-    /// Call into [Lower::store] during type lowering
-    ComponentLowerStoreEntry(__component_events::LowerStoreEntryEvent),
+    /// Call into type lowering for flat destination
+    ComponentLowerFlatEntry(__component_events::LowerFlatEntryEvent),
+    /// Call into type lowering for memory destination
+    ComponentLowerMemoryEntry(__component_events::LowerMemoryEntryEvent),
     /// Call into a component builtin
     ComponentBuiltinEntry(__component_events::BuiltinEntryEvent)
 }

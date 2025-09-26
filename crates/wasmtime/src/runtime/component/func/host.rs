@@ -6,6 +6,8 @@ use crate::component::storage::{slice_to_storage_mut, storage_as_slice_mut};
 use crate::component::{ComponentNamedList, ComponentType, Instance, Lift, Lower, Val};
 use crate::prelude::*;
 use crate::rr_hooks;
+#[cfg(feature = "rr-component")]
+use crate::rr_hooks::component_hooks::ReplayLoweringPhase;
 use crate::runtime::vm::component::{
     ComponentInstance, VMComponentContext, VMLowering, VMLoweringCallee,
 };
@@ -255,7 +257,7 @@ where
 
     let types = vminstance.component().types().clone();
 
-    rr_hooks::component::record_replay_host_func_entry(storage, &ty, store.0)?;
+    rr_hooks::component_hooks::record_replay_host_func_entry(storage, &ty, store.0)?;
 
     let ty = &types[ty];
     let param_tys = InterfaceType::Tuple(ty.params);
@@ -619,12 +621,12 @@ where
         ) -> Result<()> {
             match self.lower_dst() {
                 Dst::Direct(storage) => {
-                    let result = rr_hooks::component::record_lower(
+                    let result = rr_hooks::component_hooks::record_lower_flat(
                         |cx, ty| ret.linear_lower_to_flat(cx, ty, storage),
                         cx,
                         ty,
                     );
-                    rr_hooks::component::record_host_func_return(
+                    rr_hooks::component_hooks::record_host_func_return(
                         unsafe { storage_as_slice_mut(storage) },
                         cx.store.0,
                     )?;
@@ -632,14 +634,14 @@ where
                 }
                 Dst::Indirect(ptr) => {
                     let ptr = validate_inbounds::<R>(cx.as_slice(), ptr)?;
-                    let result = rr_hooks::component::record_lower_store(
+                    let result = rr_hooks::component_hooks::record_lower_memory(
                         |cx, ty, ptr| ret.linear_lower_to_memory(cx, ty, ptr),
                         cx,
                         ty,
                         ptr,
                     );
                     // Recording here is just for marking the return event
-                    rr_hooks::component::record_host_func_return(&[], cx.store.0)?;
+                    rr_hooks::component_hooks::record_host_func_return(&[], cx.store.0)?;
                     result
                 }
             }
@@ -651,12 +653,15 @@ where
             match self.lower_dst() {
                 Dst::Direct(storage) => {
                     // This path also stores the final return values in resulting storage
-                    cx.replay_lowering(Some(unsafe { storage_as_slice_mut(storage) }))
+                    cx.replay_lowering(
+                        Some(unsafe { storage_as_slice_mut(storage) }),
+                        ReplayLoweringPhase::HostFuncReturn,
+                    )
                 }
                 Dst::Indirect(_ptr) => {
                     // While replay will not have to change '_ptr' for indirect results,
                     // it will have to overwrite any nested stored lowerings (deep copy)
-                    cx.replay_lowering(None)
+                    cx.replay_lowering(None, ReplayLoweringPhase::HostFuncReturn)
                 }
             }
         }
@@ -806,7 +811,7 @@ where
 
     let types = instance.id().get(store.0).component().types().clone();
 
-    rr_hooks::component::record_replay_host_func_entry(storage, &ty, store.0)?;
+    rr_hooks::component_hooks::record_replay_host_func_entry(storage, &ty, store.0)?;
 
     let func_ty = &types[ty];
     let param_tys = &types[func_ty.params];
@@ -919,27 +924,27 @@ where
             if let Some(cnt) = result_tys.abi.flat_count(MAX_FLAT_RESULTS) {
                 let mut dst = storage[..cnt].iter_mut();
                 for (val, ty) in result_vals.iter().zip(result_tys.types.iter()) {
-                    rr_hooks::component::record_lower(
+                    rr_hooks::component_hooks::record_lower_flat(
                         |cx, ty| val.lower(cx, ty, &mut dst),
                         &mut cx,
                         *ty,
                     )?;
                 }
                 assert!(dst.next().is_none());
-                rr_hooks::component::record_host_func_return(storage, cx.store.0)?;
+                rr_hooks::component_hooks::record_host_func_return(storage, cx.store.0)?;
             } else {
                 let ret_ptr = unsafe { storage[ret_index].assume_init_ref() };
                 let mut ptr = validate_inbounds_dynamic(&result_tys.abi, cx.as_slice(), ret_ptr)?;
                 for (val, ty) in result_vals.iter().zip(result_tys.types.iter()) {
                     let offset = types.canonical_abi(ty).next_field32_size(&mut ptr);
-                    rr_hooks::component::record_lower_store(
+                    rr_hooks::component_hooks::record_lower_memory(
                         |cx, ty, ptr| val.store(cx, ty, ptr),
                         &mut cx,
                         *ty,
                         offset,
                     )?;
                     // Recording here is just for marking the return event
-                    rr_hooks::component::record_host_func_return(&[], cx.store.0)?;
+                    rr_hooks::component_hooks::record_host_func_return(&[], cx.store.0)?;
                 }
             }
 
@@ -961,11 +966,11 @@ where
             if let Some(_cnt) = result_tys.abi.flat_count(MAX_FLAT_RESULTS) {
                 // Copy the entire contiguous storage slice (instead of looping values one-by-one)
                 // This path also stores the final return values in resulting storage
-                cx.replay_lowering(Some(storage))?;
+                cx.replay_lowering(Some(storage), ReplayLoweringPhase::HostFuncReturn)?;
             } else {
                 // The indirect `ret_ptr` will not change during replay, but it will
                 // have to overwrite any nested stored lowerings (deep copy)
-                cx.replay_lowering(None)?;
+                cx.replay_lowering(None, ReplayLoweringPhase::HostFuncReturn)?;
             }
             unsafe {
                 flags.set_may_leave(true);

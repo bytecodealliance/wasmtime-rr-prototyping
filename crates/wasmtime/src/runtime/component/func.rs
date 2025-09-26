@@ -4,6 +4,7 @@ use crate::component::storage::storage_as_slice;
 use crate::component::types::Type;
 use crate::component::values::Val;
 use crate::prelude::*;
+use crate::rr_hooks::component_hooks;
 use crate::runtime::vm::component::{ComponentInstance, InstanceFlags, ResourceTables};
 use crate::runtime::vm::{Export, VMFuncRef};
 use crate::store::StoreOpaque;
@@ -585,14 +586,17 @@ impl Func {
         // and `ComponentType` implementations, hence `ComponentType` being an
         // `unsafe` trait.
         unsafe {
-            crate::Func::call_unchecked_raw(
+            let params_and_returns = NonNull::new(core::ptr::slice_from_raw_parts_mut(
+                space.as_mut_ptr().cast(),
+                mem::size_of_val(space) / mem::size_of::<ValRaw>(),
+            ))
+            .unwrap();
+
+            component_hooks::record_replay_wasm_func(
+                |store| crate::Func::call_unchecked_raw(store, export, params_and_returns),
+                params_and_returns.as_ref(),
+                self.index,
                 &mut store,
-                export,
-                NonNull::new(core::ptr::slice_from_raw_parts_mut(
-                    space.as_mut_ptr().cast(),
-                    mem::size_of_val(space) / mem::size_of::<ValRaw>(),
-                ))
-                .unwrap(),
             )?;
         }
 

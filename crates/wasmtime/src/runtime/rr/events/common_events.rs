@@ -23,33 +23,8 @@ impl HostFuncReturnEvent {
         }
     }
     // Replay
-    /// Consume the caller event and encode it back into the slice with an optional
-    /// typechecking validation of the event.
+    /// Consume the caller event and encode it back into the slice
     pub fn move_into_slice(self, args: &mut [MaybeUninit<ValRaw>]) {
         func_argvals_into_raw_slice(self.args, args);
     }
 }
-
-//type WasmFuncArgVals = Vec<Val>;
-///// A call event from Host into a Wasm component function
-//#[derive(Debug, Clone, Serialize, Deserialize)]
-//pub struct WasmFuncEntryEvent {
-//    /// Wasm component values passed as parameters to the function
-//    args: WasmFuncArgVals,
-//}
-//
-///// A return event from a Wasm component function to Host
-/////
-///// Matches 1:1 with [`WasmFuncEntryEvent`].
-/////
-///// Note: Could potential merge with [`HostFuncReturnEvent`]?
-//#[derive(Debug, Clone, Serialize, Deserialize)]
-//pub struct WasmFuncReturnEvent {
-//    /// Lowered values passed across the call return boundary
-//    args: RRFuncArgVals,
-//}
-//impl WasmFuncReturnEvent {
-//    pub fn new(args: &[Val]) {
-//        Self { args }
-//    }
-//}
