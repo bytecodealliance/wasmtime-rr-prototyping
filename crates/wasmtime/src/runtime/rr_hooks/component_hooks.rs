@@ -1,6 +1,10 @@
 use crate::ValRaw;
 #[cfg(feature = "component-model")]
 use crate::component::func::LowerContext;
+#[cfg(feature = "rr-component")]
+use crate::rr::component_events::{
+    HostFuncReturnEvent, LowerFlatReturnEvent, LowerMemoryReturnEvent, WasmFuncEntryEvent,
+};
 #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
 use crate::rr::{
     RRFuncArgVals, component_events::WasmFuncReturnEvent, func_argvals_from_raw_slice,
@@ -10,11 +14,6 @@ use crate::{StoreContextMut, prelude::*};
 use core::mem::MaybeUninit;
 #[cfg(feature = "component-model")]
 use wasmtime_environ::component::{ExportIndex, InterfaceType, TypeFuncIndex};
-
-#[cfg(feature = "rr-component")]
-use crate::rr::component_events::{
-    HostFuncReturnEvent, LowerFlatReturnEvent, LowerMemoryReturnEvent, WasmFuncEntryEvent,
-};
 
 /// Indicator type signalling the context during lowering
 #[cfg(feature = "rr-component")]
@@ -30,16 +29,17 @@ pub fn record_replay_wasm_func<F, T>(
     wasm_call: F,
     args: &[ValRaw],
     func_idx: ExportIndex,
+    component: [u8; 32],
     store: &mut StoreContextMut<'_, T>,
 ) -> Result<()>
 where
     F: FnOnce(&mut StoreContextMut<'_, T>) -> Result<()>,
 {
-    let _ = (args, func_idx);
+    let _ = (args, component, func_idx);
     #[cfg(feature = "rr-component")]
     store
         .0
-        .record_event(|| WasmFuncEntryEvent::new(args, func_idx))?;
+        .record_event(|| WasmFuncEntryEvent::new(args, component, func_idx))?;
     let result = wasm_call(store);
     #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
     {

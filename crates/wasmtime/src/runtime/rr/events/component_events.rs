@@ -14,13 +14,13 @@ use wasmtime_environ::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstantiationEvent {
     /// A checksum of the component bytecode
-    checksum: [u8; 32],
+    component: [u8; 32],
 }
 
 impl InstantiationEvent {
     pub fn from_component(component: &Component) -> Self {
         Self {
-            checksum: *component.checksum(),
+            component: *component.checksum(),
         }
     }
 }
@@ -32,13 +32,16 @@ impl InstantiationEvent {
 pub struct WasmFuncEntryEvent {
     /// Raw values passed across call boundary
     args: RRFuncArgVals,
+    /// Checksum of component containing function
+    component: [u8; 32],
     func_idx: ExportIndex,
 }
 impl WasmFuncEntryEvent {
     // Record
-    pub fn new(args: &[ValRaw], func_idx: ExportIndex) -> Self {
+    pub fn new(args: &[ValRaw], component: [u8; 32], func_idx: ExportIndex) -> Self {
         Self {
             args: func_argvals_from_raw_slice(args),
+            component,
             func_idx,
         }
     }
@@ -145,8 +148,10 @@ macro_rules! generic_new_result_events {
 
     (@validate_impl $event:ident,$ok_ty:ty,$err_variant:path) => {
         #[cfg(feature = "rr-validate")]
+        /// Note: Anyhow result types cannot use blanket PartialEq implementations since
+        /// anyhow results are not serialized directly. They need to specifically check
+        /// for divergence between recorded and replayed effects with [EventActionError]
         impl Validate<Result<$ok_ty>> for $event {
-            /// We can check that realloc is deterministic (as expected by the engine)
             fn validate(&self, expect_ret: &Result<$ok_ty>) -> Result<(), ReplayError> {
                 self.log();
                 // Cannot just use eq since anyhow::Error and EventActionError cannot be compared
@@ -286,7 +291,3 @@ generic_new_result_events! {
 
 // Entry/return events for each builtin function
 wasmtime_environ::foreach_builtin_component_function!(builtin_events);
-
-// === Special Validation ===
-// `realloc` needs to actually check for divergence
-// between recorded and replayed realloc effects
