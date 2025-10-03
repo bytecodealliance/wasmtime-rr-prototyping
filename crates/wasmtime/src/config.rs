@@ -179,7 +179,7 @@ pub struct Config {
     pub(crate) macos_use_mach_ports: bool,
     pub(crate) detect_host_feature: Option<fn(&str) -> Option<bool>>,
     #[cfg(feature = "rr")]
-    pub(crate) rr: Option<RRConfig>,
+    pub(crate) record_support: bool,
 }
 
 /// User-provided configuration for the compiler.
@@ -395,7 +395,7 @@ impl Config {
             #[cfg(not(feature = "std"))]
             detect_host_feature: None,
             #[cfg(feature = "rr")]
-            rr: None,
+            record_support: false,
         };
         #[cfg(any(feature = "cranelift", feature = "winch"))]
         {
@@ -2834,6 +2834,22 @@ impl Config {
         self
     }
 
+    /// Enable execution trace recording with the provided configuration.
+    ///
+    /// This method implicitly enforces determinism (see [`Config::enforce_determinism`]
+    /// for details).
+    #[cfg(feature = "rr")]
+    #[inline]
+    pub fn recording(&mut self, enable: bool) -> &mut Self {
+        if enable {
+            self.enforce_determinism();
+        } else {
+            self.remove_determinism_enforcement();
+        }
+        self.record_support = enable;
+        self
+    }
+
     /// Evaluates to true if current configuration must respect
     /// deterministic execution in its configuration.
     ///
@@ -2841,59 +2857,7 @@ impl Config {
     #[cfg(feature = "rr")]
     #[inline]
     pub fn is_determinism_enforced(&mut self) -> bool {
-        self.rr.is_some()
-    }
-
-    /// Enable execution trace recording with the provided configuration.
-    ///
-    /// This method implicitly enforces determinism (see [`Config::enforce_determinism`]
-    /// for details).
-    ///
-    /// ## Errors
-    ///
-    /// Errors if record/replay are simultaneously enabled.
-    #[cfg(feature = "rr")]
-    pub fn enable_record(&mut self, record: RecordConfig) -> Result<&mut Self> {
-        self.enforce_determinism();
-        if let Some(cfg) = &self.rr {
-            if let RRConfig::Replay(_) = cfg {
-                bail!("Cannot enable recording when replay is already enabled");
-            }
-        }
-        self.rr = Some(RRConfig::from(record));
-        Ok(self)
-    }
-
-    /// Enable replay execution based on the provided configuration.
-    ///
-    /// This method implicitly enforces determinism (see [`Config::enforce_determinism`]
-    /// for details).
-    ///
-    /// ## Errors
-    ///
-    /// Errors if record/replay are simultaneously enabled.
-    #[cfg(feature = "rr")]
-    pub fn enable_replay(&mut self, replay: ReplayConfig) -> Result<&mut Self> {
-        self.enforce_determinism();
-        if let Some(cfg) = &self.rr {
-            if let RRConfig::Record(_) = cfg {
-                bail!("Cannot enable replay when recording is already enabled");
-            }
-        }
-        self.rr = Some(RRConfig::from(replay));
-        Ok(self)
-    }
-
-    /// Disable the currently active record/replay configuration, and remove
-    /// any determinism enforcement it introduced as side-effects.
-    ///
-    /// A common option is used for both record/replay here
-    /// since record and replay can never be set simultaneously/
-    #[cfg(feature = "rr")]
-    pub fn disable_record_replay(&mut self) -> &mut Self {
-        self.remove_determinism_enforcement();
-        self.rr = None;
-        self
+        self.record_support
     }
 }
 

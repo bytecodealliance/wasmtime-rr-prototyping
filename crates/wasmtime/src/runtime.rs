@@ -88,6 +88,8 @@ pub use linker::*;
 pub use memory::*;
 pub use module::{Module, ModuleExport};
 pub use resources::*;
+#[cfg(feature = "rr")]
+pub use rr::{RecordWriter, ReplayReader};
 #[cfg(all(feature = "async", feature = "call-hook"))]
 pub use store::CallHookHandler;
 pub use store::{

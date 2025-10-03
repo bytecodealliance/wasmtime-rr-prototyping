@@ -36,7 +36,7 @@ cfg_if::cfg_if! {
 /// Serialize and write `value` to a `RecordWriter`
 ///
 /// Currently uses `postcard` serializer
-pub fn to_record_writer<T, W>(value: &T, writer: W) -> Result<()>
+pub(super) fn to_record_writer<T, W>(value: &T, writer: W) -> Result<()>
 where
     T: Serialize + ?Sized,
     W: RecordWriter,
@@ -55,7 +55,7 @@ where
 ///
 /// Currently uses `postcard` deserializer, with optional scratch
 /// buffer to deserialize into
-pub fn from_replay_reader<'a, T, R>(reader: R, scratch: &'a mut [u8]) -> Result<T>
+pub(super) fn from_replay_reader<'a, T, R>(reader: R, scratch: &'a mut [u8]) -> Result<T>
 where
     T: Deserialize<'a>,
     R: ReplayReader + 'a,

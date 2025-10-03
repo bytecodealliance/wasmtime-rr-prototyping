@@ -118,13 +118,14 @@ rr_event! {
     ComponentBuiltinReturn(__component_events::BuiltinReturnEvent),
 
     // OPTIONAL events for replay validation
-    //
-    // ReallocReturn is optional because we can assume the realloc is deterministic
-    // and the error message is subsumed by the containing LowerReturn/LowerStoreReturn
 
     /// Return from a Wasm component function back to host
     ComponentWasmFuncReturn(__component_events::WasmFuncReturnEvent),
     /// Return from Component ABI realloc call
+    ///
+    /// Since realloc is deterministic, ReallocReturn is optional.
+    /// Any error is subsumed by the containing LowerReturn/LowerStoreReturn
+    /// that triggered realloc
     ComponentReallocReturn(__component_events::ReallocReturnEvent),
     /// Call into host function from component
     ComponentHostFuncEntry(__component_events::HostFuncEntryEvent),
@@ -193,7 +194,7 @@ impl From<EventActionError> for ReplayError {
 /// This trait provides the interface for a FIFO recorder
 pub trait Recorder {
     /// Construct a recorder with the writer backend
-    fn new_recorder(writer: Box<dyn RecordWriter>, settings: RecordSettings) -> Result<Self>
+    fn new_recorder(writer: impl RecordWriter + 'static, settings: RecordSettings) -> Result<Self>
     where
         Self: Sized;
 
@@ -242,19 +243,9 @@ pub trait Replayer: Iterator<Item = RREvent> {
         Self: Sized;
 
     /// Get settings associated with the replay process
-    #[allow(
-        unused,
-        reason = "currently used only for validation resulting in \
-    many unnecessary feature gates. will expand in the future to more features and this attribute can be removed"
-    )]
     fn settings(&self) -> &ReplaySettings;
 
     /// Get the settings (embedded within the trace) during recording
-    #[allow(
-        unused,
-        reason = "currently used only for validation resulting in \
-    many unnecessary feature gates. will expand in the future to more features and this attribute can be removed"
-    )]
     fn trace_settings(&self) -> &RecordSettings;
 
     // Provided Methods
@@ -364,13 +355,16 @@ impl Drop for RecordBuffer {
 }
 
 impl Recorder for RecordBuffer {
-    fn new_recorder(mut writer: Box<dyn RecordWriter>, settings: RecordSettings) -> Result<Self> {
+    fn new_recorder(
+        mut writer: impl RecordWriter + 'static,
+        settings: RecordSettings,
+    ) -> Result<Self> {
         // Replay requires the Module version and record settings
         io::to_record_writer(ModuleVersionStrategy::WasmtimeVersion.as_str(), &mut writer)?;
         io::to_record_writer(&settings, &mut writer)?;
         Ok(RecordBuffer {
             buf: Vec::new(),
-            writer: writer,
+            writer: Box::new(writer),
             settings: settings,
         })
     }
@@ -405,18 +399,8 @@ pub struct ReplayBuffer {
     /// Reader to read replay trace from
     reader: Box<dyn ReplayReader>,
     /// Settings in replay configuration
-    #[allow(
-        unused,
-        reason = "currently used only for validation resulting in \
-    many unnecessary feature gates. will expand in the future to more features and this attribute can be removed"
-    )]
     settings: ReplaySettings,
     /// Settings for record configuration (encoded in the trace)
-    #[allow(
-        unused,
-        reason = "currently used only for validation resulting in \
-    many unnecessary feature gates. will expand in the future to more features and this attribute can be removed"
-    )]
     trace_settings: RecordSettings,
     /// Intermediate static buffer for deserialization
     deser_buffer: Vec<u8>,
@@ -454,7 +438,8 @@ impl Drop for ReplayBuffer {
             if let RREvent::Eof = event {
             } else {
                 log::warn!(
-                    "Replay buffer is dropped with {} remaining events, and is likely an invalid execution",
+                    "Replay buffer is dropped with {} remaining events, 
+                    and is likely an invalid/incomplete execution",
                     self.count()
                 );
             }

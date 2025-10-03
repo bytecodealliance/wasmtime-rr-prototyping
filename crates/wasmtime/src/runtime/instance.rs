@@ -933,7 +933,7 @@ fn pre_instantiate_raw(
     }
 
     #[cfg(feature = "rr")]
-    if module.engine().rr().is_some()
+    if module.engine().is_recording()
         && module.exports().any(|export| {
             use crate::ExternType;
             if let ExternType::Memory(_) = export.ty() {
@@ -943,7 +943,9 @@ fn pre_instantiate_raw(
             }
         })
     {
-        bail!("Cannot support record/replay for core wasm modules when a memory is exported");
+        bail!(
+            "Cannot support recording for core wasm modules when a memory is exported; consider using components"
+        );
     }
 
     Ok(imports)

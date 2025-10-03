@@ -76,6 +76,8 @@
 //! contents of `StoreOpaque`. This is an invariant that we, as the authors of
 //! `wasmtime`, must uphold for the public interface to be safe.
 
+#[cfg(feature = "rr")]
+use crate::RecordSettings;
 use crate::RootSet;
 #[cfg(feature = "component-model-async")]
 use crate::component::ComponentStoreData;
@@ -88,7 +90,9 @@ use crate::prelude::*;
 #[cfg(feature = "rr-validate")]
 use crate::rr::Validate;
 #[cfg(feature = "rr")]
-use crate::rr::{RREvent, RecordBuffer, Recorder, ReplayBuffer, ReplayError, Replayer};
+use crate::rr::{
+    RREvent, RecordBuffer, RecordWriter, Recorder, ReplayBuffer, ReplayError, Replayer,
+};
 #[cfg(feature = "gc")]
 use crate::runtime::vm::GcRootsList;
 #[cfg(feature = "stack-switching")]
@@ -617,29 +621,9 @@ impl<T> Store<T> {
             #[cfg(feature = "component-model-async")]
             concurrent_async_state: Default::default(),
             #[cfg(feature = "rr")]
-            record_buffer: engine.rr().and_then(|v| {
-                v.record().and_then(|record| {
-                    Some(
-                        RecordBuffer::new_recorder(
-                            (record.writer_initializer)(),
-                            record.settings.clone(),
-                        )
-                        .unwrap(),
-                    )
-                })
-            }),
+            record_buffer: None,
             #[cfg(feature = "rr")]
-            replay_buffer: engine.rr().and_then(|v| {
-                v.replay().and_then(|replay| {
-                    Some(
-                        ReplayBuffer::new_replayer(
-                            (replay.reader_initializer)(),
-                            replay.settings.clone(),
-                        )
-                        .unwrap(),
-                    )
-                })
-            }),
+            replay_buffer: None,
         };
         let mut inner = Box::new(StoreInner {
             inner,
@@ -1027,6 +1011,20 @@ impl<T> Store<T> {
         callback: impl FnMut(StoreContextMut<T>) -> Result<UpdateDeadline> + Send + Sync + 'static,
     ) {
         self.inner.epoch_deadline_callback(Box::new(callback));
+    }
+
+    /// Configure a [`Store`] to enable execution recording
+    ///
+    /// This feature must be initialized before instantiating any module within
+    /// the Store. Recording of events is performed according to provided settings, and
+    /// written to the provided writer.
+    #[cfg(feature = "rr")]
+    pub fn init_recording(
+        &mut self,
+        recorder: impl RecordWriter + 'static,
+        settings: RecordSettings,
+    ) -> Result<()> {
+        self.inner.init_recording(recorder, settings)
     }
 }
 
@@ -1456,6 +1454,24 @@ impl StoreOpaque {
     #[inline]
     pub fn vm_store_context_mut(&mut self) -> &mut VMStoreContext {
         &mut self.vm_store_context
+    }
+
+    #[cfg(feature = "rr")]
+    pub fn init_recording(
+        &mut self,
+        recorder: impl RecordWriter + 'static,
+        settings: RecordSettings,
+    ) -> Result<()> {
+        ensure!(
+            self.instance_count == 0,
+            "store recording must be initialized before instantiating any modules or components"
+        );
+        ensure!(
+            self.engine().is_recording(),
+            "store recording requires recording enabled on config"
+        );
+        self.record_buffer = Some(RecordBuffer::new_recorder(recorder, settings)?);
+        Ok(())
     }
 
     #[cfg(feature = "rr")]
