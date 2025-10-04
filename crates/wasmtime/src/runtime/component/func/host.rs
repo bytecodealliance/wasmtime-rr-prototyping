@@ -943,9 +943,9 @@ where
                         *ty,
                         offset,
                     )?;
-                    // Recording here is just for marking the return event
-                    rr_hooks::component_hooks::record_host_func_return(&[], cx.store.0)?;
                 }
+                // Recording here is just for marking the return event
+                rr_hooks::component_hooks::record_host_func_return(&[], cx.store.0)?;
             }
 
             unsafe {
