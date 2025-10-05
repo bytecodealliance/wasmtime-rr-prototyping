@@ -76,8 +76,6 @@
 //! contents of `StoreOpaque`. This is an invariant that we, as the authors of
 //! `wasmtime`, must uphold for the public interface to be safe.
 
-#[cfg(feature = "rr")]
-use crate::RecordSettings;
 use crate::RootSet;
 #[cfg(feature = "component-model-async")]
 use crate::component::ComponentStoreData;
@@ -91,7 +89,8 @@ use crate::prelude::*;
 use crate::rr::Validate;
 #[cfg(feature = "rr")]
 use crate::rr::{
-    RREvent, RecordBuffer, RecordWriter, Recorder, ReplayBuffer, ReplayError, Replayer,
+    RREvent, RecordBuffer, RecordSettings, RecordWriter, Recorder, ReplayBuffer, ReplayError,
+    Replayer,
 };
 #[cfg(feature = "gc")]
 use crate::runtime::vm::GcRootsList;

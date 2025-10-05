@@ -7,7 +7,7 @@
 //!
 //! This module does NOT support RR for component builtins yet.
 
-use crate::config::{ModuleVersionStrategy, RecordSettings, ReplaySettings};
+use crate::config::{ModuleVersionStrategy, ReplaySettings};
 use crate::prelude::*;
 use core::fmt;
 use events::EventActionError;
@@ -24,6 +24,26 @@ pub use events::{RRFuncArgVals, func_argvals_from_raw_slice};
 use events::{common_events, component_events as __component_events};
 pub use events::{core_events, marker_events};
 pub use io::{RecordWriter, ReplayReader};
+
+/// Settings for execution recording.
+#[cfg(feature = "rr")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordSettings {
+    /// Flag to include additional signatures for replay validation.
+    pub add_validation: bool,
+    /// Maximum window size of internal event buffer.
+    pub event_window_size: usize,
+}
+
+#[cfg(feature = "rr")]
+impl Default for RecordSettings {
+    fn default() -> Self {
+        Self {
+            add_validation: false,
+            event_window_size: 16,
+        }
+    }
+}
 
 /// Encapsulation of event types comprising an [`RREvent`] sum type
 mod events;

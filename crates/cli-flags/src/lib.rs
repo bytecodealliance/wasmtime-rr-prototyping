@@ -1020,33 +1020,14 @@ impl CommonOptions {
 
         let record = &self.record;
         match_feature! {
-            ["rr" : record.path.clone()]
-            path => {
-                use std::{io, sync::Arc};
-                use wasmtime::{RecordConfig, RecordSettings};
-                let default_settings = RecordSettings::default();
+            ["rr" : &record.path]
+            _path => {
                 match_feature! {
                     ["rr-validate": record.validation_metadata]
                     _v => (),
                     _ => err,
                 }
-                config.enable_record(RecordConfig {
-                    writer_initializer: Arc::new(move || {
-                        if path.trim().is_empty() {
-                            Box::new(io::sink())
-                        } else {
-                            Box::new(io::BufWriter::new(fs::File::create(&path).unwrap()))
-                        }
-                    }),
-                    settings: RecordSettings {
-                        add_validation: record
-                            .validation_metadata
-                            .unwrap_or(default_settings.add_validation),
-                        event_window_size: record
-                            .event_window_size
-                            .unwrap_or(default_settings.event_window_size),
-                    },
-                })?
+                config.recording(true);
             },
             _ => err,
         }

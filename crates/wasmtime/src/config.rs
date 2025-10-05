@@ -3,8 +3,6 @@ use alloc::sync::Arc;
 use bitflags::Flags;
 use core::fmt;
 use core::str::FromStr;
-#[cfg(feature = "rr")]
-use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "cache", feature = "cranelift", feature = "winch"))]
 use std::path::Path;
 use wasmparser::WasmFeatures;
@@ -27,7 +25,7 @@ use crate::stack::{StackCreator, StackCreatorProxy};
 use wasmtime_fiber::RuntimeFiberStackCreator;
 
 #[cfg(feature = "rr")]
-use crate::rr::{RecordWriter, ReplayReader};
+use crate::rr::ReplayReader;
 #[cfg(feature = "runtime")]
 pub use crate::runtime::code_memory::CustomCodeMemory;
 #[cfg(feature = "cache")]
@@ -236,36 +234,6 @@ impl Default for CompilerConfig {
     }
 }
 
-/// Settings for execution recording.
-#[cfg(feature = "rr")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecordSettings {
-    /// Flag to include additional signatures for replay validation.
-    pub add_validation: bool,
-    /// Maximum window size of internal event buffer.
-    pub event_window_size: usize,
-}
-
-#[cfg(feature = "rr")]
-impl Default for RecordSettings {
-    fn default() -> Self {
-        Self {
-            add_validation: false,
-            event_window_size: 16,
-        }
-    }
-}
-
-/// Configuration for recording execution.
-#[cfg(feature = "rr")]
-#[derive(Clone)]
-pub struct RecordConfig {
-    /// Closure that generates a writer for recording execution traces.
-    pub writer_initializer: Arc<dyn Fn() -> Box<dyn RecordWriter> + Send + Sync>,
-    /// Associated metadata for configuring the recording strategy.
-    pub settings: RecordSettings,
-}
-
 /// Settings for execution replay.
 #[cfg(feature = "rr")]
 #[derive(Debug, Clone)]
@@ -300,17 +268,8 @@ pub struct ReplayConfig {
 #[cfg(feature = "rr")]
 #[derive(Clone)]
 pub enum RRConfig {
-    /// Record configuration.
-    Record(RecordConfig),
     /// Replay configuration.
     Replay(ReplayConfig),
-}
-
-#[cfg(feature = "rr")]
-impl From<RecordConfig> for RRConfig {
-    fn from(value: RecordConfig) -> Self {
-        Self::Record(value)
-    }
 }
 
 #[cfg(feature = "rr")]
@@ -322,22 +281,12 @@ impl From<ReplayConfig> for RRConfig {
 
 #[cfg(feature = "rr")]
 impl RRConfig {
-    /// Obtain the record configuration.
-    ///
-    /// Return [`None`] if it is not configured.
-    pub fn record(&self) -> Option<&RecordConfig> {
-        match self {
-            Self::Record(r) => Some(r),
-            _ => None,
-        }
-    }
     /// Obtain the replay configuration.
     ///
     /// Return [`None`] if it is not configured.
     pub fn replay(&self) -> Option<&ReplayConfig> {
         match self {
             Self::Replay(r) => Some(r),
-            _ => None,
         }
     }
 }

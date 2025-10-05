@@ -18,6 +18,10 @@ use wasmtime::ReplayConfig;
 use wasmtime::{Engine, Func, Module, Store, StoreLimits, Val, ValType};
 use wasmtime_wasi::{WasiCtxView, WasiView};
 
+#[cfg(feature = "rr")]
+use std::{fs, io};
+#[cfg(feature = "rr")]
+use wasmtime::RecordSettings;
 #[cfg(feature = "wasi-config")]
 use wasmtime_wasi_config::{WasiConfig, WasiConfigVariables};
 #[cfg(feature = "wasi-http")]
@@ -112,7 +116,7 @@ impl RunCommand {
 
         #[cfg(feature = "rr")]
         if let Some(cfg) = replay_cfg {
-            config.enable_replay(cfg)?;
+            //config.enable_replay(cfg)?;
         }
 
         let engine = Engine::new(&config)?;
@@ -170,6 +174,27 @@ impl RunCommand {
         // fuel amount to this store.
         if let Some(fuel) = self.run.common.wasm.fuel {
             store.set_fuel(fuel)?;
+        }
+
+        #[cfg(feature = "rr")]
+        {
+            let record = &self.run.common.record;
+            if let Some(path) = &record.path {
+                let default_settings = RecordSettings::default();
+                let settings = RecordSettings {
+                    add_validation: record
+                        .validation_metadata
+                        .unwrap_or(default_settings.add_validation),
+                    event_window_size: record
+                        .event_window_size
+                        .unwrap_or(default_settings.event_window_size),
+                };
+                if path.trim().is_empty() {
+                    store.init_recording(io::sink(), settings)?;
+                } else {
+                    store.init_recording(fs::File::create(&path)?, settings)?;
+                }
+            }
         }
 
         // Always run the module asynchronously to ensure that the module can be
