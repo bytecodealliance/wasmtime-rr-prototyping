@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use crate::rr_hooks;
+use crate::rr;
 use crate::runtime::Uninhabited;
 use crate::runtime::vm::{
     InterpreterRef, SendSyncPtr, StoreBox, VMArrayCallHostFuncContext, VMCommonStackInformation,
@@ -2378,7 +2378,7 @@ impl HostContext {
 
             // Record/replay(validation) of the raw parameter arguments
             // Don't need auto-assert GC store here since we aren't using P, just raw args
-            rr_hooks::core_hooks::record_replay_host_func_entry(
+            rr::core_hooks::record_replay_host_func_entry(
                 unsafe { &args.as_ref()[..num_params] },
                 &func_type_index,
                 caller.store.0,
@@ -2423,14 +2423,14 @@ impl HostContext {
                     unsafe { ret.store(&mut store, args.as_mut())? };
                 }
                 // Record the return values
-                rr_hooks::core_hooks::record_host_func_return(
+                rr::core_hooks::record_host_func_return(
                     unsafe { &args.as_ref()[..num_results] },
                     &func_type_index,
                     caller.store.0,
                 )?;
             } else {
                 // Replay the return values
-                rr_hooks::core_hooks::replay_host_func_return(
+                rr::core_hooks::replay_host_func_return(
                     unsafe { &mut args.as_mut()[..num_results] },
                     &func_type_index,
                     caller.store.0,

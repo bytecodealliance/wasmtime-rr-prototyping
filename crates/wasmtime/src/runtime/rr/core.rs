@@ -1,12 +1,3 @@
-#![cfg(feature = "rr")]
-//! Wasmtime's Record and Replay support.
-//!
-//! This feature is currently not optimized and under development
-//!
-//! ## Notes
-//!
-//! This module does NOT support RR for component builtins yet.
-
 use crate::config::{ModuleVersionStrategy, ReplaySettings};
 use crate::prelude::*;
 use core::fmt;

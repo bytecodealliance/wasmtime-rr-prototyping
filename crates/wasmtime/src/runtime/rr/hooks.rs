@@ -1,4 +1,3 @@
-//! Convenience methods for hooking in RR event recording/replaying to the rest of the engine
 #[cfg(feature = "rr-component")]
 use crate::rr::{RecordBuffer, Recorder, component_events::MemorySliceWriteEvent};
 

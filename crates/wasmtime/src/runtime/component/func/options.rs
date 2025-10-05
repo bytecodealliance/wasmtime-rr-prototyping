@@ -11,8 +11,8 @@ use crate::rr::{
 #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
 use crate::rr::{Validate, component_events::ReallocReturnEvent};
 #[cfg(feature = "rr-component")]
-use crate::rr_hooks::component_hooks::ReplayLoweringPhase;
-use crate::rr_hooks::{ConstMemorySliceCell, MemorySliceCell};
+use crate::rr::component_hooks::ReplayLoweringPhase;
+use crate::rr::{ConstMemorySliceCell, MemorySliceCell};
 use crate::runtime::vm::component::{
     CallContexts, ComponentInstance, InstanceFlags, ResourceTable, ResourceTables,
 };
