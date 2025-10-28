@@ -1,4 +1,4 @@
-use crate::config::{ModuleVersionStrategy, ReplaySettings};
+use crate::config::ModuleVersionStrategy;
 use crate::prelude::*;
 use core::fmt;
 use events::EventActionError;
@@ -32,6 +32,26 @@ impl Default for RecordSettings {
         Self {
             add_validation: false,
             event_window_size: 16,
+        }
+    }
+}
+
+/// Settings for execution replay.
+#[cfg(feature = "rr")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplaySettings {
+    /// Flag to include additional signatures for replay validation.
+    pub validate: bool,
+    /// Static buffer size for deserialization of variable-length types (like [String]).
+    pub deser_buffer_size: usize,
+}
+
+#[cfg(feature = "rr")]
+impl Default for ReplaySettings {
+    fn default() -> Self {
+        Self {
+            validate: false,
+            deser_buffer_size: 64,
         }
     }
 }
@@ -249,7 +269,7 @@ pub trait Recorder {
 /// essentially operates as an iterator over the recorded events
 pub trait Replayer: Iterator<Item = RREvent> {
     /// Constructs a reader on buffer
-    fn new_replayer(reader: Box<dyn ReplayReader>, settings: ReplaySettings) -> Result<Self>
+    fn new_replayer(reader: impl ReplayReader + 'static, settings: ReplaySettings) -> Result<Self>
     where
         Self: Sized;
 
@@ -459,7 +479,10 @@ impl Drop for ReplayBuffer {
 }
 
 impl Replayer for ReplayBuffer {
-    fn new_replayer(mut reader: Box<dyn ReplayReader>, settings: ReplaySettings) -> Result<Self> {
+    fn new_replayer(
+        mut reader: impl ReplayReader + 'static,
+        settings: ReplaySettings,
+    ) -> Result<Self> {
         let mut scratch = [0u8; 12];
         // Ensure module versions match
         let version = io::from_replay_reader::<&str, _>(&mut reader, &mut scratch)?;
@@ -479,6 +502,7 @@ impl Replayer for ReplayBuffer {
         }
 
         let deser_buffer = vec![0; settings.deser_buffer_size];
+        let reader = Box::new(reader);
 
         Ok(ReplayBuffer {
             reader,

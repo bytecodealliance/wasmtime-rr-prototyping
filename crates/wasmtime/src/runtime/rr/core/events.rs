@@ -132,6 +132,7 @@ where
         if self == expect {
             Ok(())
         } else {
+            log::error!("Validation against {:?} failed!", expect);
             Err(ReplayError::FailedValidation)
         }
     }

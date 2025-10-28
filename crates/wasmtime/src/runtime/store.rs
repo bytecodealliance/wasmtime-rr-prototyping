@@ -90,7 +90,7 @@ use crate::rr::Validate;
 #[cfg(feature = "rr")]
 use crate::rr::{
     RREvent, RecordBuffer, RecordSettings, RecordWriter, Recorder, ReplayBuffer, ReplayError,
-    Replayer,
+    ReplayReader, ReplaySettings, Replayer,
 };
 #[cfg(feature = "gc")]
 use crate::runtime::vm::GcRootsList;
@@ -1025,6 +1025,20 @@ impl<T> Store<T> {
     ) -> Result<()> {
         self.inner.init_recording(recorder, settings)
     }
+
+    /// Configure a [`Store`] to enable execution replaying
+    ///
+    /// This feature must be initialized before instantiating any module within
+    /// the Store. Replay of events is performed according to provided settings, and
+    /// read from the provided reader.
+    #[cfg(feature = "rr")]
+    pub fn init_replaying(
+        &mut self,
+        replayer: impl ReplayReader + 'static,
+        settings: ReplaySettings,
+    ) -> Result<()> {
+        self.inner.init_replaying(replayer, settings)
+    }
 }
 
 impl<'a, T> StoreContext<'a, T> {
@@ -1470,6 +1484,24 @@ impl StoreOpaque {
             "store recording requires recording enabled on config"
         );
         self.record_buffer = Some(RecordBuffer::new_recorder(recorder, settings)?);
+        Ok(())
+    }
+
+    #[cfg(feature = "rr")]
+    pub fn init_replaying(
+        &mut self,
+        replayer: impl ReplayReader + 'static,
+        settings: ReplaySettings,
+    ) -> Result<()> {
+        ensure!(
+            self.instance_count == 0,
+            "replaying store must not initialize any modules"
+        );
+        ensure!(
+            !self.engine().is_recording(),
+            "store recording cannot be enabled when initializing replay"
+        );
+        self.replay_buffer = Some(ReplayBuffer::new_replayer(replayer, settings)?);
         Ok(())
     }
 

@@ -47,9 +47,11 @@ where
         store
             .0
             .record_event_validation(|| WasmFuncReturnEvent::from_anyhow_result(&result))?;
-        store
-            .0
-            .next_replay_event_validation::<WasmFuncReturnEvent, Result<RRFuncArgVals>>(&result)?;
+        // TODO: After adding validation support, replay with `next_replay_event_validation`
+        store.0.next_replay_event_and(|_r: WasmFuncReturnEvent| {
+            log::warn!("Yet to implement validation for WasmFuncReturnEvent; skipping for now");
+            Ok(())
+        })?;
         result?;
         return Ok(());
     }

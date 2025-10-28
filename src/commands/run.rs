@@ -5,23 +5,25 @@
     allow(irrefutable_let_patterns, unreachable_patterns)
 )]
 
+#[cfg(feature = "rr")]
+use crate::commands::ReplayOptions;
 use crate::common::{Profile, RunCommon, RunTarget};
 use anyhow::{Context as _, Error, Result, anyhow, bail};
 use clap::Parser;
 use std::ffi::OsString;
+#[cfg(feature = "rr")]
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use wasi_common::sync::{Dir, TcpListener, WasiCtxBuilder, ambient_authority};
-#[cfg(feature = "rr")]
-use wasmtime::ReplayConfig;
 use wasmtime::{Engine, Func, Module, Store, StoreLimits, Val, ValType};
 use wasmtime_wasi::{WasiCtxView, WasiView};
 
 #[cfg(feature = "rr")]
 use std::{fs, io};
 #[cfg(feature = "rr")]
-use wasmtime::RecordSettings;
+use wasmtime::{RecordSettings, ReplaySettings};
 #[cfg(feature = "wasi-config")]
 use wasmtime_wasi_config::{WasiConfig, WasiConfigVariables};
 #[cfg(feature = "wasi-http")]
@@ -93,7 +95,7 @@ impl RunCommand {
     /// Executes the command.
     pub fn execute(
         mut self,
-        #[cfg(feature = "rr")] replay_cfg: Option<ReplayConfig>,
+        #[cfg(feature = "rr")] replay_opts: Option<ReplayOptions>,
     ) -> Result<()> {
         self.run.common.init_logging()?;
 
@@ -115,8 +117,8 @@ impl RunCommand {
         }
 
         #[cfg(feature = "rr")]
-        if let Some(cfg) = replay_cfg {
-            //config.enable_replay(cfg)?;
+        if replay_opts.is_some() {
+            config.replaying(true);
         }
 
         let engine = Engine::new(&config)?;
@@ -194,6 +196,18 @@ impl RunCommand {
                 } else {
                     store.init_recording(fs::File::create(&path)?, settings)?;
                 }
+            }
+
+            if let Some(opts) = replay_opts {
+                let settings = ReplaySettings {
+                    validate: opts.validate,
+                    deser_buffer_size: opts.deser_buffer_size,
+                    ..Default::default()
+                };
+                store.init_replaying(
+                    BufReader::new(fs::File::open(opts.trace).unwrap()),
+                    settings,
+                )?;
             }
         }
 

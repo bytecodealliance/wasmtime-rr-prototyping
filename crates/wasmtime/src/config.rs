@@ -24,8 +24,6 @@ use crate::stack::{StackCreator, StackCreatorProxy};
 #[cfg(feature = "async")]
 use wasmtime_fiber::RuntimeFiberStackCreator;
 
-#[cfg(feature = "rr")]
-use crate::rr::ReplayReader;
 #[cfg(feature = "runtime")]
 pub use crate::runtime::code_memory::CustomCodeMemory;
 #[cfg(feature = "cache")]
@@ -178,6 +176,8 @@ pub struct Config {
     pub(crate) detect_host_feature: Option<fn(&str) -> Option<bool>>,
     #[cfg(feature = "rr")]
     pub(crate) record_support: bool,
+    #[cfg(feature = "rr")]
+    pub(crate) replay_support: bool,
 }
 
 /// User-provided configuration for the compiler.
@@ -231,63 +231,6 @@ impl CompilerConfig {
 impl Default for CompilerConfig {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Settings for execution replay.
-#[cfg(feature = "rr")]
-#[derive(Debug, Clone)]
-pub struct ReplaySettings {
-    /// Flag to include additional signatures for replay validation.
-    pub validate: bool,
-    /// Static buffer size for deserialization of variable-length types (like [String]).
-    pub deser_buffer_size: usize,
-}
-
-#[cfg(feature = "rr")]
-impl Default for ReplaySettings {
-    fn default() -> Self {
-        Self {
-            validate: false,
-            deser_buffer_size: 64,
-        }
-    }
-}
-
-/// Configuration for replay execution.
-#[cfg(feature = "rr")]
-#[derive(Clone)]
-pub struct ReplayConfig {
-    /// Closure that generates a reader for replaying execution traces.
-    pub reader_initializer: Arc<dyn Fn() -> Box<dyn ReplayReader> + Send + Sync>,
-    /// Flag for dynamic validation checks when replaying events.
-    pub settings: ReplaySettings,
-}
-
-/// Configurations for record/replay (RR) executions.
-#[cfg(feature = "rr")]
-#[derive(Clone)]
-pub enum RRConfig {
-    /// Replay configuration.
-    Replay(ReplayConfig),
-}
-
-#[cfg(feature = "rr")]
-impl From<ReplayConfig> for RRConfig {
-    fn from(value: ReplayConfig) -> Self {
-        Self::Replay(value)
-    }
-}
-
-#[cfg(feature = "rr")]
-impl RRConfig {
-    /// Obtain the replay configuration.
-    ///
-    /// Return [`None`] if it is not configured.
-    pub fn replay(&self) -> Option<&ReplayConfig> {
-        match self {
-            Self::Replay(r) => Some(r),
-        }
     }
 }
 
@@ -345,6 +288,8 @@ impl Config {
             detect_host_feature: None,
             #[cfg(feature = "rr")]
             record_support: false,
+            #[cfg(feature = "rr")]
+            replay_support: false,
         };
         #[cfg(any(feature = "cranelift", feature = "winch"))]
         {
@@ -2799,6 +2744,22 @@ impl Config {
         self
     }
 
+    /// Enable execution trace replaying with the provided configuration.
+    ///
+    /// This method implicitly enforces determinism (see [`Config::enforce_determinism`]
+    /// for details).
+    #[cfg(feature = "rr")]
+    #[inline]
+    pub fn replaying(&mut self, enable: bool) -> &mut Self {
+        if enable {
+            self.enforce_determinism();
+        } else {
+            self.remove_determinism_enforcement();
+        }
+        self.replay_support = enable;
+        self
+    }
+
     /// Evaluates to true if current configuration must respect
     /// deterministic execution in its configuration.
     ///
@@ -2806,7 +2767,7 @@ impl Config {
     #[cfg(feature = "rr")]
     #[inline]
     pub fn is_determinism_enforced(&mut self) -> bool {
-        self.record_support
+        self.record_support || self.replay_support
     }
 }
 
