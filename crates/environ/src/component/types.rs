@@ -1,4 +1,4 @@
-use crate::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
+use crate::component::{FlatTypesStorage, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 use crate::{EntityType, ModuleInternedTypeIndex, ModuleTypes, PrimaryMap};
 use crate::{TypeTrace, prelude::*};
 use core::hash::{Hash, Hasher};
@@ -362,6 +362,162 @@ impl ComponentTypes {
             InterfaceType::Option(i) => &self[*i].abi,
             InterfaceType::Result(i) => &self[*i].abi,
         }
+    }
+
+    /// Returns the flat storage representation for an interface type.
+    pub fn flat_types_storage(&self, ty: &InterfaceType) -> FlatTypesStorage {
+        let mut storage_buf = FlatTypesStorage::new();
+
+        let push_discrim =
+            |storage: &mut FlatTypesStorage| storage.push(FlatType::I32, FlatType::I32);
+
+        let push_storage = |storage: &mut FlatTypesStorage, other: FlatTypesStorage| -> bool {
+            let len = usize::from(storage.len);
+            let other_len = usize::from(other.len);
+            if len < (MAX_FLAT_TYPES - other_len + 1) {
+                storage.memory32[len..len + other_len]
+                    .copy_from_slice(&other.memory32[..other_len]);
+                storage.memory64[len..len + other_len]
+                    .copy_from_slice(&other.memory64[..other_len]);
+                storage.len += other.len;
+                true
+            } else {
+                storage.len = MAX_FLAT_TYPES as u8 + 1;
+                false
+            }
+        };
+
+        let push_storage_variant_case =
+            |storage: &mut FlatTypesStorage, case: Option<FlatTypesStorage>| -> bool {
+                if let Some(case) = case {
+                    if case.len as usize >= MAX_FLAT_TYPES {
+                        storage.len = u8::try_from(MAX_FLAT_TYPES + 1).unwrap();
+                        false
+                    } else {
+                        let dst = storage
+                            .memory32
+                            .iter_mut()
+                            .zip(&mut storage.memory64)
+                            .skip(1);
+                        for (i, ((t32, t64), (dst32, dst64))) in case
+                            .memory32
+                            .iter()
+                            .zip(case.memory64.iter())
+                            .zip(dst)
+                            .enumerate()
+                        {
+                            if i + 1 < usize::from(storage.len) {
+                                // Populated Index
+                                dst32.join(*t32);
+                                dst64.join(*t64);
+                            } else {
+                                // New Index
+                                storage.len += 1;
+                                *dst32 = *t32;
+                                *dst64 = *t64;
+                            }
+                        }
+                        true
+                    }
+                } else {
+                    true
+                }
+            };
+
+        let storage = &mut storage_buf;
+
+        match ty {
+            InterfaceType::U8
+            | InterfaceType::S8
+            | InterfaceType::Bool
+            | InterfaceType::U16
+            | InterfaceType::S16
+            | InterfaceType::U32
+            | InterfaceType::S32
+            | InterfaceType::Char
+            | InterfaceType::Own(_)
+            | InterfaceType::Future(_)
+            | InterfaceType::Stream(_)
+            | InterfaceType::ErrorContext(_)
+            | InterfaceType::Borrow(_)
+            | InterfaceType::Enum(_) => {
+                storage.push(FlatType::I32, FlatType::I32);
+            }
+
+            InterfaceType::U64 | InterfaceType::S64 => {
+                storage.push(FlatType::I64, FlatType::I64);
+            }
+            InterfaceType::Float32 => {
+                storage.push(FlatType::F32, FlatType::F32);
+            }
+            InterfaceType::Float64 => {
+                storage.push(FlatType::F64, FlatType::F64);
+            }
+            InterfaceType::String | InterfaceType::List(_) => {
+                // Pointer pair
+                storage.push(FlatType::I32, FlatType::I64);
+                storage.push(FlatType::I32, FlatType::I64);
+            }
+
+            InterfaceType::Record(i) => {
+                for field in self[*i].fields.iter() {
+                    if !push_storage(storage, self.flat_types_storage(&field.ty)) {
+                        break;
+                    }
+                }
+            }
+            InterfaceType::Tuple(i) => {
+                for ty in self[*i].types.iter() {
+                    if !push_storage(storage, self.flat_types_storage(ty)) {
+                        break;
+                    }
+                }
+            }
+            InterfaceType::Flags(i) => match FlagsSize::from_count(self[*i].names.len()) {
+                FlagsSize::Size0 => {}
+                FlagsSize::Size1 | FlagsSize::Size2 => {
+                    storage.push(FlatType::I32, FlatType::I32);
+                }
+                FlagsSize::Size4Plus(n) => {
+                    for _ in 0..n {
+                        if !storage.push(FlatType::I32, FlatType::I32) {
+                            break;
+                        }
+                    }
+                }
+            },
+            InterfaceType::Variant(i) => {
+                push_discrim(storage);
+                for case in self[*i].cases.values() {
+                    let case_flat = case.as_ref().map(|ty| self.flat_types_storage(ty));
+                    if !push_storage_variant_case(storage, case_flat) {
+                        break;
+                    }
+                }
+            }
+            InterfaceType::Option(i) => {
+                push_discrim(storage);
+                push_storage_variant_case(storage, None);
+                push_storage_variant_case(storage, Some(self.flat_types_storage(&self[*i].ty)));
+            }
+            InterfaceType::Result(i) => {
+                push_discrim(storage);
+                let result = &self[*i];
+                push_storage_variant_case(
+                    storage,
+                    result.ok.map(|ty| self.flat_types_storage(&ty)),
+                );
+                push_storage_variant_case(
+                    storage,
+                    result.err.map(|ty| self.flat_types_storage(&ty)),
+                );
+            }
+        }
+        assert_eq!(
+            storage.len as usize,
+            self.canonical_abi(ty).flat_count(usize::MAX).unwrap()
+        );
+        storage_buf
     }
 
     /// Adds a new `table` to the list of resource tables for this component.
@@ -1184,4 +1340,13 @@ pub enum FlatType {
     I64,
     F32,
     F64,
+}
+
+impl FlatType {
+    const fn byte_size(&self) -> u8 {
+        match self {
+            FlatType::I32 | FlatType::F32 => 4,
+            FlatType::I64 | FlatType::F64 => 8,
+        }
+    }
 }

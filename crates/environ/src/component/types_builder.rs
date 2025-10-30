@@ -812,22 +812,30 @@ where
     return idx;
 }
 
-struct FlatTypesStorage {
-    // This could be represented as `Vec<FlatType>` but on 64-bit architectures
-    // that's 24 bytes. Otherwise `FlatType` is 1 byte large and
-    // `MAX_FLAT_TYPES` is 16, so it should ideally be more space-efficient to
-    // use a flat array instead of a heap-based vector.
-    memory32: [FlatType; MAX_FLAT_TYPES],
-    memory64: [FlatType; MAX_FLAT_TYPES],
+/// Representation of flat types in 32-bit and 64-bit memory
+///
+/// This could be represented as `Vec<FlatType>` but on 64-bit architectures
+/// that's 24 bytes. Otherwise `FlatType` is 1 byte large and
+/// `MAX_FLAT_TYPES` is 16, so it should ideally be more space-efficient to
+/// use a flat array instead of a heap-based vector.
+#[derive(Debug)]
+pub struct FlatTypesStorage {
+    /// Representation for 32-bit memory
+    pub memory32: [FlatType; MAX_FLAT_TYPES],
+    /// Representation for 64-bit memory
+    pub memory64: [FlatType; MAX_FLAT_TYPES],
 
-    // Tracks the number of flat types pushed into this storage. If this is
-    // `MAX_FLAT_TYPES + 1` then this storage represents an un-reprsentable
-    // type in flat types.
-    len: u8,
+    /// Tracks the number of flat types pushed into this storage. If this is
+    /// `MAX_FLAT_TYPES + 1` then this storage represents an un-reprsentable
+    /// type in flat types.
+    ///
+    /// This value should be the same on both `memory32` and `memory64`
+    pub len: u8,
 }
 
 impl FlatTypesStorage {
-    const fn new() -> FlatTypesStorage {
+    /// Create a new, empty storage for flat types
+    pub const fn new() -> FlatTypesStorage {
         FlatTypesStorage {
             memory32: [FlatType::I32; MAX_FLAT_TYPES],
             memory64: [FlatType::I32; MAX_FLAT_TYPES],
@@ -835,7 +843,8 @@ impl FlatTypesStorage {
         }
     }
 
-    fn as_flat_types(&self) -> Option<FlatTypes<'_>> {
+    /// Returns a reference to flat type representation
+    pub fn as_flat_types(&self) -> Option<FlatTypes<'_>> {
         let len = usize::from(self.len);
         if len > MAX_FLAT_TYPES {
             assert_eq!(len, MAX_FLAT_TYPES + 1);
@@ -854,7 +863,7 @@ impl FlatTypesStorage {
     /// Returns whether the type was actually pushed or whether this list of
     /// flat types just exceeded the maximum meaning that it is now
     /// unrepresentable with a flat list of types.
-    fn push(&mut self, t32: FlatType, t64: FlatType) -> bool {
+    pub fn push(&mut self, t32: FlatType, t64: FlatType) -> bool {
         let len = usize::from(self.len);
         if len < MAX_FLAT_TYPES {
             self.memory32[len] = t32;
@@ -873,7 +882,8 @@ impl FlatTypesStorage {
 }
 
 impl FlatType {
-    fn join(&mut self, other: FlatType) {
+    /// Constructs the "joined" representation for two flat types
+    pub fn join(&mut self, other: FlatType) {
         if *self == other {
             return;
         }
