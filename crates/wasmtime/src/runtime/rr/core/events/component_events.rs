@@ -3,11 +3,12 @@
 use super::*;
 use crate::component::Component;
 use crate::vm::component::libcalls::ResourceDropRet;
+use core::ops::Deref;
 // Re-export common events from this module
 pub use common_events::*;
 use wasmtime_environ::{
     self,
-    component::{ExportIndex, InterfaceType, TypeFuncIndex},
+    component::{ExportIndex, FlatTypesStorage, InterfaceType, TypeFuncIndex},
 };
 
 /// A [`Component`] instantiatation event
@@ -38,9 +39,14 @@ pub struct WasmFuncEntryEvent {
 }
 impl WasmFuncEntryEvent {
     // Record
-    pub fn new(args: &[ValRaw], component: [u8; 32], func_idx: ExportIndex) -> Self {
+    pub fn new(
+        args: &[ValRaw],
+        flat: FlatTypesStorage,
+        component: [u8; 32],
+        func_idx: ExportIndex,
+    ) -> Self {
         Self {
-            args: func_argvals_from_raw_slice(args),
+            args: RRFuncArgVals::from_raw_slice(args, flat.iter32()),
             component,
             func_idx,
         }
@@ -49,12 +55,12 @@ impl WasmFuncEntryEvent {
     // Replay
     /// Consume the caller event and encode it back into the slice
     pub fn move_into_slice(self, args: &mut [MaybeUninit<ValRaw>]) {
-        func_argvals_into_raw_slice(self.args, args);
+        self.args.into_raw_slice(args);
     }
 }
 
 /// A call event from a Wasm component into the host
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HostFuncEntryEvent {
     /// Raw values passed across the call entry boundary
     args: RRFuncArgVals,
@@ -68,21 +74,10 @@ pub struct HostFuncEntryEvent {
 }
 impl HostFuncEntryEvent {
     // Record
-    pub fn new(args: &[MaybeUninit<ValRaw>], ty: TypeFuncIndex) -> Self {
+    pub fn new(args: &[MaybeUninit<ValRaw>], flat: FlatTypesStorage, ty: TypeFuncIndex) -> Self {
         Self {
-            args: func_argvals_from_raw_slice(args),
+            args: RRFuncArgVals::from_raw_slice(args, flat.iter32()),
             ty: ty,
-        }
-    }
-}
-#[cfg(feature = "rr-validate")]
-impl Validate<TypeFuncIndex> for HostFuncEntryEvent {
-    fn validate(&self, expect_ty: &TypeFuncIndex) -> Result<(), ReplayError> {
-        self.log();
-        if &self.ty == expect_ty {
-            Ok(())
-        } else {
-            Err(ReplayError::FailedValidation)
         }
     }
 }
@@ -123,58 +118,88 @@ pub struct MemorySliceWriteEvent {
     pub bytes: Vec<u8>,
 }
 
-macro_rules! generic_new_result_events {
-    (
-        $(
-            $(#[$meta:meta])*
-            $event:ident -> ($ok_ty:ty,$err_variant:path)
-        ),*
-    ) => (
-        $(
-            $(#[$meta])*
-            #[derive(Debug, Clone, Serialize, Deserialize)]
-            pub struct $event(Result<$ok_ty, EventActionError>);
+/// Result event types that are serialized/deserialized for record and replay.
+///
+/// Anyhow result types cannot use blanket PartialEq implementations since
+/// anyhow results are not serialized directly. They need to specifically check
+/// for divergence between recorded and replayed effects with [EventActionError]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultEvent<T>(Result<T, EventActionError>);
 
-            impl $event {
-                pub fn from_anyhow_result(ret: &Result<$ok_ty>) -> Self {
-                    Self(ret.as_ref().map(|t| (*t).clone()).map_err(|e| $err_variant(e.to_string())))
-                }
-                pub fn ret(self) -> Result<$ok_ty, EventActionError> { self.0 }
-            }
+impl<T> Deref for ResultEvent<T> {
+    type Target = Result<T, EventActionError>;
 
-            generic_new_result_events!(@validate_impl $event,$ok_ty,$err_variant);
-        )*
-    );
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
-    (@validate_impl $event:ident,$ok_ty:ty,$err_variant:path) => {
-        #[cfg(feature = "rr-validate")]
-        /// Note: Anyhow result types cannot use blanket PartialEq implementations since
-        /// anyhow results are not serialized directly. They need to specifically check
-        /// for divergence between recorded and replayed effects with [EventActionError]
-        impl Validate<Result<$ok_ty>> for $event {
-            fn validate(&self, expect_ret: &Result<$ok_ty>) -> Result<(), ReplayError> {
-                self.log();
-                // Cannot just use eq since anyhow::Error and EventActionError cannot be compared
-                match (self.0.as_ref(), expect_ret.as_ref()) {
-                    (Ok(r), Ok(s)) => {
-                        if r == s {
-                            Ok(())
-                        } else {
-                            Err(ReplayError::FailedValidation)
-                        }
-                    }
-                    // Return the recorded error
-                    (Err(e), Err(f)) => Err(ReplayError::from($err_variant(format!(
-                        "Replayed Error for {}: {} \nRecorded Error for {}: {}",
-                        stringify!($event), e, stringify!($event), f
-                    )))),
-                    // Diverging errors.. Report as a failed validation
-                    (Ok(_), Err(_)) => Err(ReplayError::FailedValidation),
-                    (Err(_), Ok(_)) => Err(ReplayError::FailedValidation),
+impl<T> ResultEvent<T>
+where
+    T: Clone,
+{
+    pub fn from_anyhow_result(ret: &Result<T>) -> Self {
+        Self(
+            ret.as_ref()
+                .map(|t| (*t).clone())
+                .map_err(|e| EventActionError::ReallocError(e.to_string())),
+        )
+    }
+    pub fn ret(self) -> Result<T, EventActionError> {
+        self.0
+    }
+}
+
+impl<T: fmt::Debug + PartialEq> Validate<Result<T>> for ResultEvent<T> {
+    fn validate(&self, expect_ret: &Result<T>) -> Result<(), ReplayError> {
+        self.log();
+        // Cannot just use eq since anyhow::Error and EventActionError cannot be compared
+        match (self.0.as_ref(), expect_ret.as_ref()) {
+            (Ok(r), Ok(s)) => {
+                if r == s {
+                    Ok(())
+                } else {
+                    Err(ReplayError::FailedValidation)
                 }
             }
+            // Return the recorded error
+            (Err(e), Err(f)) => Err(ReplayError::from(EventActionError::ReallocError(format!(
+                "Replayed Error: {} \nRecorded Error: {}",
+                e, f
+            )))),
+            // Diverging errors.. Report as a failed validation
+            (Ok(_), Err(_)) => Err(ReplayError::FailedValidation),
+            (Err(_), Ok(_)) => Err(ReplayError::FailedValidation),
         }
-    };
+    }
+}
+
+// TODO: Fix all the errors to use independent types
+
+/// Return from a reallocation call (needed only for validation)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReallocReturnEvent(pub ResultEvent<usize>);
+
+/// Return from type lowering to flat destination
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LowerFlatReturnEvent(pub ResultEvent<()>);
+
+/// Return from type lowering to destination in memory
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LowerMemoryReturnEvent(pub ResultEvent<()>);
+
+/// A return event from a Wasm component function to Host
+///
+/// Matches 1:1 with [`WasmFuncEntryEvent`].
+///
+/// Note: Could potential merge with [`HostFuncReturnEvent`] as [`HostToWasmEvent`]?
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmFuncReturnEvent(pub ResultEvent<RRFuncArgVals>);
+
+impl Validate<Result<RRFuncArgVals>> for WasmFuncReturnEvent {
+    fn validate(&self, expect: &Result<RRFuncArgVals>) -> Result<(), ReplayError> {
+        self.0.validate(expect)
+    }
 }
 
 // Macro to generate RR events from the builtin descriptions
@@ -271,22 +296,6 @@ macro_rules! builtin_events {
 
     // Return first value
     (@ret_first $first:tt $($rest:tt)*) => ($first);
-}
-
-// Return events with anyhow error conversion to EventActionError
-generic_new_result_events! {
-    /// Return from a reallocation call (needed only for validation)
-    ReallocReturnEvent -> (usize, EventActionError::ReallocError),
-    /// Return from type lowering to flat destination
-    LowerFlatReturnEvent -> ((), EventActionError::LowerFlatError),
-    /// Return from type lowering to destination in memory
-    LowerMemoryReturnEvent -> ((), EventActionError::LowerMemoryError),
-    /// A return event from a Wasm component function to Host
-    ///
-    /// Matches 1:1 with [`WasmFuncEntryEvent`].
-    ///
-    /// Note: Could potential merge with [`HostFuncEntryEvent`] as [`HostToWasmEvent`]?
-    WasmFuncReturnEvent -> (RRFuncArgVals, EventActionError::WasmFuncReturnError)
 }
 
 // Entry/return events for each builtin function

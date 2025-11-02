@@ -5,7 +5,7 @@ use wasmtime_environ::VMSharedTypeIndex;
 pub use common_events::*;
 
 /// A call event from a Core Wasm module into the host
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HostFuncEntryEvent {
     /// Raw values passed across the call/return boundary
     args: RRFuncArgVals,
@@ -14,21 +14,10 @@ pub struct HostFuncEntryEvent {
 }
 impl HostFuncEntryEvent {
     // Record
-    pub fn new(args: &[MaybeUninit<ValRaw>], types: VMSharedTypeIndex) -> Self {
+    pub fn new(args: &[MaybeUninit<ValRaw>], flat: &[u8], types: VMSharedTypeIndex) -> Self {
         Self {
-            args: func_argvals_from_raw_slice(args),
+            args: RRFuncArgVals::from_raw_slice(args, flat.iter().copied()),
             types: types,
-        }
-    }
-}
-#[cfg(feature = "rr-validate")]
-impl Validate<VMSharedTypeIndex> for HostFuncEntryEvent {
-    fn validate(&self, expect_types: &VMSharedTypeIndex) -> Result<(), ReplayError> {
-        self.log();
-        if &self.types == expect_types {
-            Ok(())
-        } else {
-            Err(ReplayError::FailedValidation)
         }
     }
 }

@@ -233,6 +233,15 @@ impl WasmValType {
         }
     }
 
+    /// Return the number of bytes needed to represent this value
+    pub fn byte_size(&self) -> u8 {
+        match self {
+            WasmValType::I32 | WasmValType::F32 => 4,
+            WasmValType::I64 | WasmValType::F64 => 8,
+            WasmValType::V128 | WasmValType::Ref(_) => 16,
+        }
+    }
+
     /// Returns the contained reference type.
     ///
     /// Panics if the value type is not a vmgcref

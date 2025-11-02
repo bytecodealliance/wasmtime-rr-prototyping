@@ -2366,20 +2366,30 @@ impl HostContext {
             let func = &state.func;
 
             let func_type_index = state._ty.index();
-            let (num_params, num_results) = {
+            let (params_size, results_size) = {
                 let type_index = state._ty.index();
                 let wasm_func_subtype = caller.engine().signatures().borrow(type_index).unwrap();
                 let wasm_func_type = wasm_func_subtype.unwrap_func();
                 (
-                    wasm_func_type.params().len(),
-                    wasm_func_type.returns().len(),
+                    wasm_func_type
+                        .params()
+                        .into_iter()
+                        .map(|x| x.byte_size())
+                        .collect::<Vec<_>>(),
+                    wasm_func_type
+                        .returns()
+                        .into_iter()
+                        .map(|x| x.byte_size())
+                        .collect::<Vec<_>>(),
                 )
             };
+            let (num_params, num_results) = (params_size.len(), results_size.len());
 
             // Record/replay(validation) of the raw parameter arguments
             // Don't need auto-assert GC store here since we aren't using P, just raw args
             rr::core_hooks::record_replay_host_func_entry(
                 unsafe { &args.as_ref()[..num_params] },
+                params_size.as_slice(),
                 &func_type_index,
                 caller.store.0,
             )?;
@@ -2425,6 +2435,7 @@ impl HostContext {
                 // Record the return values
                 rr::core_hooks::record_host_func_return(
                     unsafe { &args.as_ref()[..num_results] },
+                    results_size.as_slice(),
                     &func_type_index,
                     caller.store.0,
                 )?;

@@ -1,19 +1,20 @@
 use crate::ValRaw;
 #[cfg(feature = "component-model")]
 use crate::component::func::LowerContext;
+use crate::component::store::StoreComponentInstanceId;
 #[cfg(feature = "rr-component")]
 use crate::rr::component_events::{
-    HostFuncReturnEvent, LowerFlatReturnEvent, LowerMemoryReturnEvent, WasmFuncEntryEvent,
+    HostFuncReturnEvent, LowerFlatReturnEvent, LowerMemoryReturnEvent, ResultEvent,
+    WasmFuncEntryEvent,
 };
 #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
-use crate::rr::{
-    RRFuncArgVals, component_events::WasmFuncReturnEvent, func_argvals_from_raw_slice,
-};
+use crate::rr::{RRFuncArgVals, component_events::WasmFuncReturnEvent};
 use crate::store::StoreOpaque;
 use crate::{StoreContextMut, prelude::*};
+use alloc::sync::Arc;
 use core::mem::MaybeUninit;
 #[cfg(feature = "component-model")]
-use wasmtime_environ::component::{ExportIndex, InterfaceType, TypeFuncIndex};
+use wasmtime_environ::component::{ComponentTypes, ExportIndex, InterfaceType, TypeFuncIndex};
 
 /// Indicator type signalling the context during lowering
 #[cfg(feature = "rr-component")]
@@ -29,29 +30,43 @@ pub fn record_replay_wasm_func<F, T>(
     wasm_call: F,
     args: &[ValRaw],
     func_idx: ExportIndex,
-    component: [u8; 32],
+    type_idx: TypeFuncIndex,
+    id: StoreComponentInstanceId,
     store: &mut StoreContextMut<'_, T>,
 ) -> Result<()>
 where
     F: FnOnce(&mut StoreContextMut<'_, T>) -> Result<()>,
 {
-    let _ = (args, component, func_idx);
+    let _ = (args, id, func_idx, type_idx);
     #[cfg(feature = "rr-component")]
-    store
-        .0
-        .record_event(|| WasmFuncEntryEvent::new(args, component, func_idx))?;
+    let component = id.get(store.0).component();
+    #[cfg(feature = "rr-component")]
+    let types = component.types();
+    #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
+    let flat_results = types.flat_types_storage(&InterfaceType::Tuple(types[type_idx].results));
+    #[cfg(feature = "rr-component")]
+    {
+        let checksum = *component.checksum();
+        let flat_params = types.flat_types_storage(&InterfaceType::Tuple(types[type_idx].params));
+        store
+            .0
+            .record_event(|| WasmFuncEntryEvent::new(args, flat_params, checksum, func_idx))?;
+    }
     let result = wasm_call(store);
     #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
     {
-        let result = result.map(|_| func_argvals_from_raw_slice(args));
+        let result = result.map(|_| RRFuncArgVals::from_raw_slice(args, flat_results.iter32()));
+        store.0.record_event_validation(|| {
+            WasmFuncReturnEvent(ResultEvent::from_anyhow_result(&result))
+        })?;
         store
             .0
-            .record_event_validation(|| WasmFuncReturnEvent::from_anyhow_result(&result))?;
-        // TODO: After adding validation support, replay with `next_replay_event_validation`
-        store.0.next_replay_event_and(|_r: WasmFuncReturnEvent| {
-            log::warn!("Yet to implement validation for WasmFuncReturnEvent; skipping for now");
-            Ok(())
-        })?;
+            .next_replay_event_validation::<WasmFuncReturnEvent, Result<RRFuncArgVals>>(&result)?;
+        //// TODO: After adding validation support, replay with `next_replay_event_validation`
+        //store.0.next_replay_event_and(|_r: WasmFuncReturnEvent| {
+        //    log::warn!("Yet to implement validation for WasmFuncReturnEvent; skipping for now");
+        //    Ok(())
+        //})?;
         result?;
         return Ok(());
     }
@@ -63,16 +78,19 @@ where
 #[inline]
 pub fn record_replay_host_func_entry(
     args: &mut [MaybeUninit<ValRaw>],
-    func_idx: &TypeFuncIndex,
+    types: &Arc<ComponentTypes>,
+    type_idx: &TypeFuncIndex,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
     {
         use crate::rr::component_events::HostFuncEntryEvent;
-        store.record_event_validation(|| HostFuncEntryEvent::new(args, func_idx.clone()))?;
-        store.next_replay_event_validation::<HostFuncEntryEvent, _>(func_idx)?;
+        let flat_params = types.flat_types_storage(&InterfaceType::Tuple(types[*type_idx].params));
+        let event = HostFuncEntryEvent::new(args, flat_params, type_idx.clone());
+        store.record_event_validation(|| event.clone())?;
+        store.next_replay_event_validation::<HostFuncEntryEvent, _>(&event)?;
     }
-    let _ = (args, func_idx, store);
+    let _ = (args, types, type_idx, store);
     Ok(())
 }
 
@@ -80,11 +98,16 @@ pub fn record_replay_host_func_entry(
 #[inline]
 pub fn record_host_func_return(
     args: &[MaybeUninit<ValRaw>],
+    types: &ComponentTypes,
+    ty: &InterfaceType,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr-component")]
-    store.record_event(|| HostFuncReturnEvent::new(args))?;
-    let _ = (args, store);
+    {
+        let flat_results = types.flat_types_storage(&ty).iter32().collect::<Vec<_>>();
+        store.record_event(|| HostFuncReturnEvent::new(args, flat_results.as_slice()))?;
+    }
+    let _ = (args, types, ty, store);
     Ok(())
 }
 
@@ -110,7 +133,7 @@ where
     #[cfg(feature = "rr-component")]
     cx.store
         .0
-        .record_event(|| LowerMemoryReturnEvent::from_anyhow_result(&store_result))?;
+        .record_event(|| LowerMemoryReturnEvent(ResultEvent::from_anyhow_result(&store_result)))?;
     store_result
 }
 
@@ -135,6 +158,6 @@ where
     #[cfg(feature = "rr-component")]
     cx.store
         .0
-        .record_event(|| LowerFlatReturnEvent::from_anyhow_result(&lower_result))?;
+        .record_event(|| LowerFlatReturnEvent(ResultEvent::from_anyhow_result(&lower_result)))?;
     lower_result
 }

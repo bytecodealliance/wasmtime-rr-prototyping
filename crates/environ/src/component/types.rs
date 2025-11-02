@@ -1343,7 +1343,8 @@ pub enum FlatType {
 }
 
 impl FlatType {
-    const fn byte_size(&self) -> u8 {
+    /// Return the size in bytes for this flat type
+    pub const fn byte_size(&self) -> u8 {
         match self {
             FlatType::I32 | FlatType::F32 => 4,
             FlatType::I64 | FlatType::F64 => 8,

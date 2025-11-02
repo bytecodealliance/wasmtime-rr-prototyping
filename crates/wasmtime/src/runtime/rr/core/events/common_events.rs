@@ -17,14 +17,14 @@ pub struct HostFuncReturnEvent {
 }
 impl HostFuncReturnEvent {
     // Record
-    pub fn new(args: &[MaybeUninit<ValRaw>]) -> Self {
+    pub fn new(args: &[MaybeUninit<ValRaw>], flat: &[u8]) -> Self {
         Self {
-            args: func_argvals_from_raw_slice(args),
+            args: RRFuncArgVals::from_raw_slice(args, flat.iter().copied()),
         }
     }
     // Replay
     /// Consume the caller event and encode it back into the slice
     pub fn move_into_slice(self, args: &mut [MaybeUninit<ValRaw>]) {
-        func_argvals_into_raw_slice(self.args, args);
+        self.args.into_raw_slice(args);
     }
 }

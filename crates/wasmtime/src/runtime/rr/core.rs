@@ -6,12 +6,12 @@ use serde::{Deserialize, Serialize};
 // Use component events internally even without feature flags enabled
 // so that [`RREvent`] has a well-defined serialization format, but export
 // it for other modules only when enabled
+#[cfg(all(feature = "rr-validate", feature = "rr-component"))]
+pub use events::RRFuncArgVals;
 #[cfg(any(feature = "rr-validate", feature = "rr-component"))]
 pub use events::Validate;
 #[cfg(feature = "rr-component")]
 pub use events::component_events;
-#[cfg(all(feature = "rr-validate", feature = "rr-component"))]
-pub use events::{RRFuncArgVals, func_argvals_from_raw_slice};
 use events::{common_events, component_events as __component_events};
 pub use events::{core_events, marker_events};
 pub use io::{RecordWriter, ReplayReader};
@@ -535,20 +535,24 @@ mod tests {
     #[test]
     #[cfg(all(feature = "rr", feature = "rr-component"))]
     fn rr_buffers() -> Result<()> {
+        use wasmtime_environ::component::FlatTypesStorage;
+
         let record_settings = RecordSettings::default();
         let tmp = NamedTempFile::new()?;
         let tmppath = tmp.path().to_str().expect("Filename should be UTF-8");
 
-        let values = vec![ValRaw::i32(1), ValRaw::f32(2), ValRaw::i64(3)]
-            .into_iter()
-            .map(|x| MaybeUninit::new(x))
-            .collect::<Vec<_>>();
+        let values = vec![ValRaw::i32(1), ValRaw::f32(2), ValRaw::i64(3)];
+        let flat = FlatTypesStorage::new();
+        flat.push(FlatType::I32, FlatType::I32);
+        flat.push(FlatType::F32, FlatType::F32);
+        flat.push(FlatType::I64, FlatType::I64);
 
         // Record values
         let mut recorder =
             RecordBuffer::new_recorder(Box::new(File::create(tmppath)?), record_settings)?;
-        recorder
-            .record_event(|| __component_events::HostFuncReturnEvent::new(values.as_slice()))?;
+        recorder.record_event(|| {
+            __component_events::HostFuncReturnEvent::new(values.as_slice(), flat)
+        })?;
         recorder.flush()?;
 
         let tmp = tmp.into_temp_path();

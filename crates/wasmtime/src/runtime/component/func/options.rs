@@ -4,15 +4,17 @@ use crate::component::matching::InstanceType;
 use crate::component::resources::{HostResourceData, HostResourceIndex, HostResourceTables};
 use crate::component::{Instance, ResourceType};
 use crate::prelude::*;
+#[cfg(all(feature = "rr-component", feature = "rr-validate"))]
+use crate::rr::component_events::ResultEvent;
+#[cfg(feature = "rr-component")]
+use crate::rr::component_hooks::ReplayLoweringPhase;
+use crate::rr::{ConstMemorySliceCell, MemorySliceCell};
 #[cfg(feature = "rr-component")]
 use crate::rr::{
     RREvent, RecordBuffer, ReplayError, Replayer, component_events::ReallocEntryEvent,
 };
 #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
 use crate::rr::{Validate, component_events::ReallocReturnEvent};
-#[cfg(feature = "rr-component")]
-use crate::rr::component_hooks::ReplayLoweringPhase;
-use crate::rr::{ConstMemorySliceCell, MemorySliceCell};
 use crate::runtime::vm::component::{
     CallContexts, ComponentInstance, InstanceFlags, ResourceTable, ResourceTables,
 };
@@ -404,9 +406,9 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         })?;
         let result = self.realloc_inner(old, old_size, old_align, new_size);
         #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
-        self.store
-            .0
-            .record_event_validation(|| ReallocReturnEvent::from_anyhow_result(&result))?;
+        self.store.0.record_event_validation(|| {
+            ReallocReturnEvent(ResultEvent::from_anyhow_result(&result))
+        })?;
         result
     }
 
@@ -636,7 +638,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                     if run_validate {
                         _lower_stack.pop().ok_or(ReplayError::InvalidOrdering)?;
                     }
-                    lowering_error = e.ret().map_err(Into::into).err();
+                    lowering_error = e.0.ret().map_err(Into::into).err();
                 }
                 RREvent::ComponentLowerMemoryReturn(e) => {
                     #[cfg(feature = "rr-validate")]
@@ -645,7 +647,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                             .pop()
                             .ok_or(ReplayError::InvalidOrdering)?;
                     }
-                    lowering_error = e.ret().map_err(Into::into).err();
+                    lowering_error = e.0.ret().map_err(Into::into).err();
                 }
                 RREvent::ComponentMemorySliceWrite(e) => {
                     // The bounds check is performed here is required here (in the absence of
@@ -665,7 +667,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                 {
                     #[cfg(feature = "rr-validate")]
                     if run_validate {
-                        lowering_error = _e.validate(&_realloc_stack.pop().unwrap()).err()
+                        lowering_error = _e.0.validate(&_realloc_stack.pop().unwrap()).err()
                     }
                 }
                 RREvent::ComponentLowerFlatEntry(_) => {

@@ -257,11 +257,11 @@ where
 
     let types = vminstance.component().types().clone();
 
-    rr::component_hooks::record_replay_host_func_entry(storage, &ty, store.0)?;
+    rr::component_hooks::record_replay_host_func_entry(storage, &types, &ty, store.0)?;
 
-    let ty = &types[ty];
-    let param_tys = InterfaceType::Tuple(ty.params);
-    let result_tys = InterfaceType::Tuple(ty.results);
+    let func_ty = &types[ty];
+    let param_tys = InterfaceType::Tuple(func_ty.params);
+    let result_tys = InterfaceType::Tuple(func_ty.results);
 
     let storage_type = if async_ {
         #[cfg(feature = "component-model-async")]
@@ -628,6 +628,8 @@ where
                     );
                     rr::component_hooks::record_host_func_return(
                         unsafe { storage_as_slice_mut(storage) },
+                        cx.types,
+                        &ty,
                         cx.store.0,
                     )?;
                     result
@@ -641,7 +643,7 @@ where
                         ptr,
                     );
                     // Recording here is just for marking the return event
-                    rr::component_hooks::record_host_func_return(&[], cx.store.0)?;
+                    rr::component_hooks::record_host_func_return(&[], cx.types, &ty, cx.store.0)?;
                     result
                 }
             }
@@ -811,7 +813,7 @@ where
 
     let types = instance.id().get(store.0).component().types().clone();
 
-    rr::component_hooks::record_replay_host_func_entry(storage, &ty, store.0)?;
+    rr::component_hooks::record_replay_host_func_entry(storage, &types, &ty, store.0)?;
 
     let func_ty = &types[ty];
     let param_tys = &types[func_ty.params];
@@ -931,7 +933,12 @@ where
                     )?;
                 }
                 assert!(dst.next().is_none());
-                rr::component_hooks::record_host_func_return(storage, cx.store.0)?;
+                rr::component_hooks::record_host_func_return(
+                    storage,
+                    cx.types,
+                    &InterfaceType::Tuple(func_ty.results),
+                    cx.store.0,
+                )?;
             } else {
                 let ret_ptr = unsafe { storage[ret_index].assume_init_ref() };
                 let mut ptr = validate_inbounds_dynamic(&result_tys.abi, cx.as_slice(), ret_ptr)?;
@@ -945,7 +952,12 @@ where
                     )?;
                 }
                 // Recording here is just for marking the return event
-                rr::component_hooks::record_host_func_return(&[], cx.store.0)?;
+                rr::component_hooks::record_host_func_return(
+                    &[],
+                    cx.types,
+                    &InterfaceType::Tuple(func_ty.results),
+                    cx.store.0,
+                )?;
             }
 
             unsafe {

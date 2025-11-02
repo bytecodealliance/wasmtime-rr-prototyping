@@ -879,6 +879,14 @@ impl FlatTypesStorage {
             false
         }
     }
+
+    /// Generate an iterator over the 32-bit flat encoding
+    pub fn iter32(&self) -> impl Iterator<Item = u8> {
+        self.memory32
+            .iter()
+            .take(self.len as usize)
+            .map(|f| f.byte_size())
+    }
 }
 
 impl FlatType {

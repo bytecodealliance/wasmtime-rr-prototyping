@@ -1392,6 +1392,9 @@ pub union ValRaw {
     ///
     /// This value is always stored in a little-endian format.
     exnref: u32,
+
+    /// A representation of underlying union as a byte vector
+    bytes: [u8; 16],
 }
 
 // The `ValRaw` type is matched as `wasmtime_val_raw_t` in the C API so these
@@ -1606,16 +1609,19 @@ impl ValRaw {
         exnref
     }
 
-    /// Get the raw bits of the union
+    /// Get the WebAssembly value's raw bytes
     #[inline]
-    pub fn as_bytes(&self) -> [u8; mem::size_of::<Self>()] {
-        unsafe { mem::transmute(*self) }
+    pub fn get_bytes(&self) -> &[u8; mem::size_of::<Self>()] {
+        unsafe { &self.bytes }
+        //unsafe { &*(self as *const Self as *const [u8; mem::size_of::<Self>()]) }
     }
 
-    /// Construct ValRaw from raw bits
+    /// Create a WebAssembly value from raw bytes
     #[inline]
-    pub fn from_bytes(value: [u8; mem::size_of::<Self>()]) -> Self {
-        unsafe { mem::transmute(value) }
+    pub fn bytes(value: &[u8]) -> ValRaw {
+        let mut bytes = [0u8; mem::size_of::<ValRaw>()];
+        bytes[..value.len()].copy_from_slice(value);
+        ValRaw { bytes }
     }
 }
 

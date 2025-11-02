@@ -596,7 +596,8 @@ impl Func {
                 |store| crate::Func::call_unchecked_raw(store, export, params_and_returns),
                 params_and_returns.as_ref(),
                 self.index,
-                *self.instance.id().get(store.0).component().checksum(),
+                self.abi_info(store.0).2,
+                self.instance.id(),
                 &mut store,
             )?;
         }

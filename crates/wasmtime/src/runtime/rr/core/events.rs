@@ -3,7 +3,7 @@ use super::ReplayError;
 use crate::ValRaw;
 use crate::prelude::*;
 use core::fmt;
-use core::mem::{self, MaybeUninit};
+use core::mem::MaybeUninit;
 use serde::{Deserialize, Serialize};
 
 /// A serde compatible representation of errors produced by actions during
@@ -41,60 +41,99 @@ impl fmt::Display for EventActionError {
 
 impl core::error::Error for EventActionError {}
 
-type ValRawBytes = [u8; mem::size_of::<ValRaw>()];
-
-/// Types that can be converted zero-copy to [`ValRawBytes`] for
-/// serialization/deserialization in record/replay (since
-/// unions are non serializable by `serde`)
-///
-/// Essentially [`From`] and [`Into`] but local to the crate
-/// to bypass orphan rule for externally defined types
-pub trait ValRawBytesConvertable {
-    fn to_valraw_bytes(self) -> ValRawBytes;
-    fn from_valraw_bytes(value: ValRawBytes) -> Self;
+/// Types that can be serialized/deserialized into/from
+/// flat types for record and replay
+pub trait FlatBytes {
+    fn bytes_ref(&self, size: u8) -> &[u8];
+    fn from_bytes(value: &[u8]) -> Self;
 }
 
-impl ValRawBytesConvertable for ValRaw {
+impl FlatBytes for ValRaw {
     #[inline]
-    fn to_valraw_bytes(self) -> ValRawBytes {
-        self.as_bytes()
+    fn bytes_ref(&self, size: u8) -> &[u8] {
+        &self.get_bytes()[..size as usize]
     }
     #[inline]
-    fn from_valraw_bytes(value: ValRawBytes) -> Self {
-        ValRaw::from_bytes(value)
+    fn from_bytes(value: &[u8]) -> Self {
+        ValRaw::bytes(value)
     }
 }
 
-impl ValRawBytesConvertable for MaybeUninit<ValRaw> {
+impl FlatBytes for MaybeUninit<ValRaw> {
     #[inline]
-    fn to_valraw_bytes(self) -> ValRawBytes {
+    fn bytes_ref(&self, size: u8) -> &[u8] {
         // Uninitialized data is assumed and serialized, so hence
         // may contain some undefined values
-        unsafe { self.assume_init() }.to_valraw_bytes()
+        let val = unsafe { self.assume_init_ref() };
+        val.bytes_ref(size)
     }
     #[inline]
-    fn from_valraw_bytes(value: ValRawBytes) -> Self {
-        MaybeUninit::new(ValRaw::from_valraw_bytes(value))
+    fn from_bytes(value: &[u8]) -> Self {
+        MaybeUninit::new(ValRaw::bytes(value))
     }
 }
 
-pub type RRFuncArgVals = Vec<ValRawBytes>;
-
-/// Construct [`RRFuncArgVals`] from raw value buffer
-pub fn func_argvals_from_raw_slice<T>(args: &[T]) -> RRFuncArgVals
-where
-    T: ValRawBytesConvertable + Copy,
-{
-    args.iter().map(|x| x.to_valraw_bytes()).collect()
+/// Representation of flat arguments for function entry/return
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+pub struct RRFuncArgVals {
+    /// Flat data vector of bytes
+    bytes: Vec<u8>,
+    /// Descriptor vector of sizes of each flat types
+    ///
+    /// The length of this vector equals the number of flat types,
+    /// and the sum of this vector equals the length of `bytes`
+    sizes: Vec<u8>,
 }
 
-/// Encode [`RRFuncArgVals`] back into raw value buffer
-fn func_argvals_into_raw_slice<T>(rr_args: RRFuncArgVals, raw_args: &mut [T])
-where
-    T: ValRawBytesConvertable,
-{
-    for (src, dst) in rr_args.into_iter().zip(raw_args.iter_mut()) {
-        *dst = T::from_valraw_bytes(src);
+impl fmt::Debug for RRFuncArgVals {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RRFuncArgVals ")?;
+        let mut pos: usize = 0;
+        let mut list = f.debug_list();
+        let hex_fmt = |bytes: &[u8]| {
+            let hex_string = bytes
+                .iter()
+                .rev()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>();
+            format!("0x{}", hex_string)
+        };
+        for flat_size in self.sizes.iter() {
+            list.entry(&(
+                flat_size,
+                hex_fmt(&self.bytes[pos..pos + *flat_size as usize]),
+            ));
+            pos += *flat_size as usize;
+        }
+        list.finish()
+    }
+}
+
+impl RRFuncArgVals {
+    /// Construct [`RRFuncArgVals`] from raw value buffer and flat sizes
+    pub fn from_raw_slice<T>(args: &[T], flat: impl Iterator<Item = u8>) -> RRFuncArgVals
+    where
+        T: FlatBytes,
+    {
+        let mut bytes = Vec::<u8>::new();
+        let mut sizes = Vec::<u8>::new();
+        for (flat_size, arg) in flat.zip(args.iter()) {
+            bytes.extend_from_slice(&arg.bytes_ref(flat_size));
+            sizes.push(flat_size);
+        }
+        RRFuncArgVals { bytes, sizes }
+    }
+
+    /// Encode [`RRFuncArgVals`] back into raw value buffer
+    pub fn into_raw_slice<T>(self, raw_args: &mut [T])
+    where
+        T: FlatBytes,
+    {
+        let mut pos = 0;
+        for (flat_size, dst) in self.sizes.into_iter().zip(raw_args.iter_mut()) {
+            *dst = T::from_bytes(&self.bytes[pos..pos + flat_size as usize]);
+            pos += flat_size as usize;
+        }
     }
 }
 
