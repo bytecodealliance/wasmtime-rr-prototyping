@@ -36,7 +36,7 @@ pub fn record_host_func_return(
 ) -> Result<()> {
     // Record the return values
     #[cfg(feature = "rr")]
-    store.record_event(|| HostFuncReturnEvent::new(&args, flat))?;
+    store.record_event(|| HostFuncReturnEvent::new_from_u8(&args, flat))?;
     let _ = (args, flat, ty, store);
     Ok(())
 }

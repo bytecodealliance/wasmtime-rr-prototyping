@@ -62,11 +62,6 @@ where
         store
             .0
             .next_replay_event_validation::<WasmFuncReturnEvent, Result<RRFuncArgVals>>(&result)?;
-        //// TODO: After adding validation support, replay with `next_replay_event_validation`
-        //store.0.next_replay_event_and(|_r: WasmFuncReturnEvent| {
-        //    log::warn!("Yet to implement validation for WasmFuncReturnEvent; skipping for now");
-        //    Ok(())
-        //})?;
         result?;
         return Ok(());
     }
@@ -104,8 +99,8 @@ pub fn record_host_func_return(
 ) -> Result<()> {
     #[cfg(feature = "rr-component")]
     {
-        let flat_results = types.flat_types_storage(&ty).iter32().collect::<Vec<_>>();
-        store.record_event(|| HostFuncReturnEvent::new(args, flat_results.as_slice()))?;
+        let flat_results = types.flat_types_storage(&ty);
+        store.record_event(|| HostFuncReturnEvent::new_from_flat_storage(args, flat_results))?;
     }
     let _ = (args, types, ty, store);
     Ok(())

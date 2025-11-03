@@ -160,9 +160,9 @@ where
             }
             // Return the recorded error
             (Err(e), Err(f)) => Err(ReplayError::from(E::new(format!(
-                "Error from recording: {} \r\n| Error on execution: {}",
-                e.get(),
-                f
+                "Error on execution: {} | Error from recording: {}",
+                f,
+                e.get()
             )))),
             // Diverging errors.. Report as a failed validation
             (Ok(_), Err(_)) => Err(ReplayError::FailedValidation),
@@ -251,7 +251,7 @@ macro_rules! builtin_events {
 
     // All things related to BuiltinReturnEvent enum
     (@gen_return_enum $($rr_var:ident $event:ident)*) => {
-        #[derive(Debug, Clone, Serialize, Deserialize)]
+        #[derive(Clone, Serialize, Deserialize)]
         pub enum BuiltinReturnEvent {
             $($rr_var($event),)*
         }
@@ -261,7 +261,7 @@ macro_rules! builtin_events {
     // All things related to BuiltinEntryEvent enum
     (@gen_entry_enum $($rr_var:ident $event:ident)*) => {
         // PartialEq gives all these events `Validate`
-        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        #[derive(Clone, PartialEq, Serialize, Deserialize)]
         pub enum BuiltinEntryEvent {
             $($rr_var($event),)*
         }
@@ -291,7 +291,8 @@ macro_rules! builtin_events {
     // Stubbed if `rr_builtin` not provided
     (@gen_return_events -> $($result_opts:tt)*) => {};
 
-    // Conversion to/from specific return `$event` and `BuiltinEntryEvent`
+    // Debug traits for $enum (BuiltinReturnEvent/BuiltinEntryEvent) and
+    // conversion to/from specific `$event` to `$enum`
     (@from_impls $enum:ident $($rr_var:ident $event:ident)*) => {
         $(
             impl From<$event> for $enum {
@@ -313,6 +314,15 @@ macro_rules! builtin_events {
                 }
             }
         )*
+
+        impl fmt::Debug for $enum {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let mut res = f.debug_tuple(stringify!($enum));
+                match self {
+                    $(Self::$rr_var(e) => res.field(e),)*
+                }.finish()
+            }
+        }
     };
 
     // Return first value

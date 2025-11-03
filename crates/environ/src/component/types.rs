@@ -374,7 +374,7 @@ impl ComponentTypes {
         let push_storage = |storage: &mut FlatTypesStorage, other: FlatTypesStorage| -> bool {
             let len = usize::from(storage.len);
             let other_len = usize::from(other.len);
-            if len < (MAX_FLAT_TYPES - other_len + 1) {
+            if len + other_len <= MAX_FLAT_TYPES {
                 storage.memory32[len..len + other_len]
                     .copy_from_slice(&other.memory32[..other_len]);
                 storage.memory64[len..len + other_len]
@@ -394,6 +394,7 @@ impl ComponentTypes {
                         storage.len = u8::try_from(MAX_FLAT_TYPES + 1).unwrap();
                         false
                     } else {
+                        // Skip 1 for discriminant
                         let dst = storage
                             .memory32
                             .iter_mut()
@@ -402,6 +403,7 @@ impl ComponentTypes {
                         for (i, ((t32, t64), (dst32, dst64))) in case
                             .memory32
                             .iter()
+                            .take(case.len as usize)
                             .zip(case.memory64.iter())
                             .zip(dst)
                             .enumerate()
@@ -513,6 +515,7 @@ impl ComponentTypes {
                 );
             }
         }
+        assert!(storage.len as usize <= MAX_FLAT_TYPES);
         assert_eq!(
             storage.len as usize,
             self.canonical_abi(ty).flat_count(usize::MAX).unwrap()
