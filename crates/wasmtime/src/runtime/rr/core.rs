@@ -1,7 +1,7 @@
 use crate::config::ModuleVersionStrategy;
 use crate::prelude::*;
 use core::fmt;
-use events::EventActionError;
+use events::EventError;
 use serde::{Deserialize, Serialize};
 // Use component events internally even without feature flags enabled
 // so that [`RREvent`] has a well-defined serialization format, but export
@@ -180,13 +180,13 @@ impl RREvent {
 }
 
 /// Error type signalling failures during a replay run
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum ReplayError {
     EmptyBuffer,
     FailedValidation,
     IncorrectEventVariant,
     InvalidOrdering,
-    EventActionError(EventActionError),
+    EventError(Box<dyn EventError>),
 }
 
 impl fmt::Display for ReplayError {
@@ -204,7 +204,7 @@ impl fmt::Display for ReplayError {
             Self::IncorrectEventVariant => {
                 write!(f, "event method invoked on incorrect variant")
             }
-            Self::EventActionError(e) => {
+            Self::EventError(e) => {
                 write!(f, "{:?}", e)
             }
             Self::InvalidOrdering => {
@@ -216,9 +216,9 @@ impl fmt::Display for ReplayError {
 
 impl core::error::Error for ReplayError {}
 
-impl From<EventActionError> for ReplayError {
-    fn from(value: EventActionError) -> Self {
-        Self::EventActionError(value)
+impl<T: EventError> From<T> for ReplayError {
+    fn from(value: T) -> Self {
+        Self::EventError(Box::new(value))
     }
 }
 

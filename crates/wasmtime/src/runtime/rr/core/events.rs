@@ -6,40 +6,21 @@ use core::fmt;
 use core::mem::MaybeUninit;
 use serde::{Deserialize, Serialize};
 
-/// A serde compatible representation of errors produced by actions during
-/// initial recording for specific events
+/// A serde compatible representation of errors produced during execution
+/// of certain events
 ///
 /// We need this since the [anyhow::Error] trait object cannot be used. This
 /// type just encapsulates the corresponding display messages during recording
-/// so that it can be re-thrown during replay
-///
-/// Unforunately since we cannot serialize [anyhow::Error], there's no good
-/// way to equate errors across record/replay boundary without creating a
-/// common error format. Perhaps this is future work
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EventActionError {
-    ReallocError(String),
-    LowerFlatError(String),
-    LowerMemoryError(String),
-    BuiltinError(String),
-    WasmFuncReturnError(String),
+/// so that it can be re-thrown during replay. Unforunately since we cannot
+/// serialize [anyhow::Error], there's no good way to equate errors across
+/// record/replay boundary without creating a common error format.
+/// Perhaps this is future work
+pub trait EventError: core::error::Error + Send + Sync + 'static {
+    fn new(t: String) -> Self
+    where
+        Self: Sized;
+    fn get(&self) -> &String;
 }
-
-impl fmt::Display for EventActionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ReallocError(s)
-            | Self::LowerFlatError(s)
-            | Self::LowerMemoryError(s)
-            | Self::BuiltinError(s)
-            | Self::WasmFuncReturnError(s) => {
-                write!(f, "{}", s)
-            }
-        }
-    }
-}
-
-impl core::error::Error for EventActionError {}
 
 /// Types that can be serialized/deserialized into/from
 /// flat types for record and replay

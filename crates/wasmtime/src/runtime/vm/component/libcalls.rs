@@ -177,7 +177,7 @@ mod trampolines {
                     #[cfg(feature = "rr-validate")]
                     (*$store).record_event_validation::<BuiltinEntryEvent, _>(|| $rr_entry{ $($pname),* }.into())?;
                     let retval = shims!(@invoke $name($store, $instance,) $($pname)*);
-                    (*$store).record_event::<BuiltinReturnEvent, _>(|| $rr_exit::from_anyhow_result(&retval).into())?;
+                    (*$store).record_event::<BuiltinReturnEvent, _>(|| $rr_exit(ResultEvent::from_anyhow_result(&retval)).into())?;
                     retval
                 }
             }
@@ -630,26 +630,6 @@ fn inflate_latin1_bytes(dst: &mut [u16], latin1_bytes_so_far: usize) -> &mut [u1
     return rest;
 }
 
-/// Hook for record/replay of libcalls. Currently stubbed for record and panics on replay
-///
-/// TODO: Implement libcall hooks
-#[inline]
-fn rr_unsupported_hook(store: &mut dyn VMStore, libcall: &str) -> Result<()> {
-    #[cfg(feature = "rr-component")]
-    {
-        if (*store).replay_enabled() {
-            bail!("Replay support for libcall {libcall:?} not yet supported!");
-        }
-        #[cfg(feature = "rr-validate")]
-        {
-            use crate::rr::marker_events::CustomMessageEvent;
-            (*store).record_event(|| CustomMessageEvent::from(libcall))?;
-        }
-    }
-    let _ = (store, libcall);
-    Ok(())
-}
-
 fn resource_new32(
     store: &mut dyn VMStore,
     instance: Instance,
@@ -721,7 +701,6 @@ fn resource_transfer_borrow(
 }
 
 fn resource_enter_call(store: &mut dyn VMStore, instance: Instance) {
-    rr_unsupported_hook(store, "resource_enter_call").unwrap();
     instance.resource_enter_call(store)
 }
 
