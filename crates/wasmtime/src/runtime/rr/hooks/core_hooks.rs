@@ -18,9 +18,10 @@ pub fn record_replay_host_func_entry(
     {
         // Record/replay the raw parameter args
         use crate::rr::core_events::HostFuncEntryEvent;
-        let event = HostFuncEntryEvent::new(&args, flat, ty.clone());
-        store.record_event_validation(|| event.clone())?;
-        store.next_replay_event_validation::<HostFuncEntryEvent, _>(&event)?;
+        store.record_event_validation(|| HostFuncEntryEvent::new(&args, flat, ty.clone()))?;
+        store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| {
+            HostFuncEntryEvent::new(&args, flat, ty.clone())
+        })?;
     }
     let _ = (args, flat, ty, store);
     Ok(())

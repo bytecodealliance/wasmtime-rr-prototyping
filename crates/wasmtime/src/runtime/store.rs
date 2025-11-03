@@ -1576,16 +1576,17 @@ impl StoreOpaque {
     /// Convenience wrapper around [`Replayer::next_event_validation`]
     #[cfg(feature = "rr-validate")]
     #[inline]
-    pub(crate) fn next_replay_event_validation<T, Y>(
+    pub(crate) fn next_replay_event_validation<T, F, Y>(
         &mut self,
-        expect: &Y,
+        expect: F,
     ) -> Result<(), ReplayError>
     where
         T: TryFrom<RREvent> + Validate<Y>,
+        F: FnOnce() -> Y,
         ReplayError: From<<T as TryFrom<RREvent>>::Error>,
     {
         if let Some(buf) = self.replay_buffer_mut() {
-            buf.next_event_validation::<T, Y>(expect)
+            buf.next_event_validation::<T, Y>(&expect())
         } else {
             Ok(())
         }

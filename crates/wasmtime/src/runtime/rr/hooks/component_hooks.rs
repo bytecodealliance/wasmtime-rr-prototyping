@@ -61,7 +61,9 @@ where
         })?;
         store
             .0
-            .next_replay_event_validation::<WasmFuncReturnEvent, Result<RRFuncArgVals>>(&result)?;
+            .next_replay_event_validation::<WasmFuncReturnEvent, _, &Result<RRFuncArgVals>>(
+                || &result,
+            )?;
         result?;
         return Ok(());
     }
@@ -80,10 +82,13 @@ pub fn record_replay_host_func_entry(
     #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
     {
         use crate::rr::component_events::HostFuncEntryEvent;
-        let flat_params = types.flat_types_storage(&InterfaceType::Tuple(types[*type_idx].params));
-        let event = HostFuncEntryEvent::new(args, flat_params, type_idx.clone());
-        store.record_event_validation(|| event.clone())?;
-        store.next_replay_event_validation::<HostFuncEntryEvent, _>(&event)?;
+        let event = || {
+            let flat_params =
+                types.flat_types_storage(&InterfaceType::Tuple(types[*type_idx].params));
+            HostFuncEntryEvent::new(args, flat_params, type_idx.clone())
+        };
+        store.record_event_validation(|| event())?;
+        store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| event())?;
     }
     let _ = (args, types, type_idx, store);
     Ok(())
@@ -98,10 +103,10 @@ pub fn record_host_func_return(
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr-component")]
-    {
+    store.record_event(|| {
         let flat_results = types.flat_types_storage(&ty);
-        store.record_event(|| HostFuncReturnEvent::new_from_flat_storage(args, flat_results))?;
-    }
+        HostFuncReturnEvent::new_from_flat_storage(args, flat_results)
+    })?;
     let _ = (args, types, ty, store);
     Ok(())
 }

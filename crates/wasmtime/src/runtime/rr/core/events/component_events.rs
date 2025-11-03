@@ -224,9 +224,9 @@ pub struct LowerMemoryReturnEvent(pub ResultEvent<(), LowerMemoryError>);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmFuncReturnEvent(pub ResultEvent<RRFuncArgVals, WasmFuncReturnError>);
 
-impl Validate<Result<RRFuncArgVals>> for WasmFuncReturnEvent {
-    fn validate(&self, expect: &Result<RRFuncArgVals>) -> Result<(), ReplayError> {
-        self.0.validate(expect)
+impl Validate<&Result<RRFuncArgVals>> for WasmFuncReturnEvent {
+    fn validate(&self, expect: &&Result<RRFuncArgVals>) -> Result<(), ReplayError> {
+        self.0.validate(*expect)
     }
 }
 
