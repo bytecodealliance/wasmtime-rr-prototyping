@@ -15,6 +15,8 @@ use alloc::sync::Arc;
 use core::mem::MaybeUninit;
 #[cfg(feature = "component-model")]
 use wasmtime_environ::component::{ComponentTypes, ExportIndex, InterfaceType, TypeFuncIndex};
+#[cfg(all(feature = "rr-component"))]
+use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 
 /// Indicator type signalling the context during lowering
 #[cfg(feature = "rr-component")]
@@ -43,11 +45,17 @@ where
     #[cfg(feature = "rr-component")]
     let types = component.types();
     #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
-    let flat_results = types.flat_types_storage(&InterfaceType::Tuple(types[type_idx].results));
+    let flat_results = types.flat_types_storage(
+        &InterfaceType::Tuple(types[type_idx].results),
+        MAX_FLAT_RESULTS,
+    );
     #[cfg(feature = "rr-component")]
     {
         let checksum = *component.checksum();
-        let flat_params = types.flat_types_storage(&InterfaceType::Tuple(types[type_idx].params));
+        let flat_params = types.flat_types_storage(
+            &InterfaceType::Tuple(types[type_idx].params),
+            MAX_FLAT_PARAMS,
+        );
         store
             .0
             .record_event(|| WasmFuncEntryEvent::new(args, flat_params, checksum, func_idx))?;
@@ -83,8 +91,10 @@ pub fn record_replay_host_func_entry(
     {
         use crate::rr::component_events::HostFuncEntryEvent;
         let event = || {
-            let flat_params =
-                types.flat_types_storage(&InterfaceType::Tuple(types[*type_idx].params));
+            let flat_params = types.flat_types_storage(
+                &InterfaceType::Tuple(types[*type_idx].params),
+                MAX_FLAT_PARAMS,
+            );
             HostFuncEntryEvent::new(args, flat_params, type_idx.clone())
         };
         store.record_event_validation(|| event())?;
@@ -104,7 +114,7 @@ pub fn record_host_func_return(
 ) -> Result<()> {
     #[cfg(feature = "rr-component")]
     store.record_event(|| {
-        let flat_results = types.flat_types_storage(&ty);
+        let flat_results = types.flat_types_storage(&ty, MAX_FLAT_RESULTS);
         HostFuncReturnEvent::new_from_flat_storage(args, flat_results)
     })?;
     let _ = (args, types, ty, store);

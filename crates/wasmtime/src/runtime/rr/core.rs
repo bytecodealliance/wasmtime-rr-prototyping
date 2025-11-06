@@ -108,6 +108,7 @@ macro_rules! rr_event {
                     if let RREvent::$variant(x) = value {
                         Ok(x)
                     } else {
+                        log::error!("Expected {}; got {}", stringify!($event), value);
                         Err(ReplayError::IncorrectEventVariant)
                     }
                 }
@@ -290,7 +291,7 @@ pub trait Replayer: Iterator<Item = RREvent> {
     fn next_event(&mut self) -> Result<RREvent, ReplayError> {
         let event = self.next().ok_or(ReplayError::EmptyBuffer);
         if let Ok(e) = &event {
-            log::debug!("Replay Event => {}", e);
+            log::debug!("Read replay event => {}", e);
         }
         event
     }

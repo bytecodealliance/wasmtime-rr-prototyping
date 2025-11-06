@@ -560,6 +560,40 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         )
     }
 
+    /// Perform a replay of only [`ReallocEntryEvent`] + [`ReallocReturnEvent`] events
+    ///
+    /// Panics if replay not enabled
+    #[cfg(feature = "rr-component")]
+    pub fn replay_realloc(&mut self) -> Result<usize> {
+        let get_event = |cx: &mut Self| cx.store.0.replay_buffer_mut().unwrap().next_event();
+        let (record_has_validation, _replay_validate) = {
+            let buf = self.store.0.replay_buffer_mut().unwrap();
+            (buf.trace_settings().add_validation, buf.settings().validate)
+        };
+
+        let ptr = match get_event(self)? {
+            RREvent::ComponentReallocEntry(e) => {
+                self.realloc_inner(e.old_addr, e.old_size, e.old_align, e.new_size)
+            }
+            _ => bail!(ReplayError::IncorrectEventVariant),
+        };
+
+        if record_has_validation {
+            match get_event(self)? {
+                RREvent::ComponentReallocReturn(e) =>
+                {
+                    #[cfg(feature = "rr-validate")]
+                    if _replay_validate {
+                        e.0.validate(&ptr)?
+                    }
+                }
+                _ => bail!(ReplayError::IncorrectEventVariant),
+            };
+        }
+
+        ptr
+    }
+
     /// Perform a replay of all the type lowering-associated events for this context
     ///
     /// These typically include all `Lower*` and `Realloc*` event, along with the putting
@@ -570,6 +604,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     /// ## Important Notes
     ///
     /// * It is assumed that this is only invoked at the root lower/store calls
+    /// * Panics if invoked while replay is not enabled
     ///
     #[cfg(feature = "rr-component")]
     pub fn replay_lowering(
