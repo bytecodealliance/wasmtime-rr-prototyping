@@ -41,16 +41,9 @@ where
 {
     let _ = (args, id, func_idx, type_idx);
     #[cfg(feature = "rr-component")]
-    let component = id.get(store.0).component();
-    #[cfg(feature = "rr-component")]
-    let types = component.types();
-    #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
-    let flat_results = types.flat_types_storage(
-        &InterfaceType::Tuple(types[type_idx].results),
-        MAX_FLAT_RESULTS,
-    );
-    #[cfg(feature = "rr-component")]
     {
+        let component = id.get(store.0).component();
+        let types = component.types();
         let checksum = *component.checksum();
         let flat_params = types.flat_types_storage(
             &InterfaceType::Tuple(types[type_idx].params),
@@ -63,6 +56,12 @@ where
     let result = wasm_call(store);
     #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
     {
+        let component = id.get(store.0).component();
+        let types = component.types();
+        let flat_results = types.flat_types_storage(
+            &InterfaceType::Tuple(types[type_idx].results),
+            MAX_FLAT_RESULTS,
+        );
         let result = result.map(|_| RRFuncArgVals::from_raw_slice(args, flat_results.iter32()));
         store.0.record_event_validation(|| {
             WasmFuncReturnEvent(ResultEvent::from_anyhow_result(&result))

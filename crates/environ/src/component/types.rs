@@ -373,6 +373,10 @@ impl ComponentTypes {
     /// not encodable in flat types, the values are all lowered to memory, implied by
     /// the empty storage
     pub fn flat_types_storage(&self, ty: &InterfaceType, limit: usize) -> FlatTypesStorage {
+        assert!(
+            limit <= MAX_FLAT_TYPES,
+            "limit exceeding maximum flat types not allowed"
+        );
         self.flat_types_storage_inner(ty, limit)
             .unwrap_or_else(|| FlatTypesStorage::new())
     }
@@ -385,7 +389,7 @@ impl ComponentTypes {
         // Helper routines
         let push = |storage: &mut FlatTypesStorage, t32: FlatType, t64: FlatType| -> bool {
             storage.push(t32, t64);
-            (storage.len as usize) < limit
+            (storage.len as usize) <= limit
         };
 
         let push_discrim = |storage: &mut FlatTypesStorage| -> bool {
@@ -394,64 +398,62 @@ impl ComponentTypes {
 
         let push_storage =
             |storage: &mut FlatTypesStorage, other: Option<FlatTypesStorage>| -> bool {
-                if let Some(other) = other {
-                    let len = usize::from(storage.len);
-                    let other_len = usize::from(other.len);
-                    if len + other_len <= limit {
-                        storage.memory32[len..len + other_len]
-                            .copy_from_slice(&other.memory32[..other_len]);
-                        storage.memory64[len..len + other_len]
-                            .copy_from_slice(&other.memory64[..other_len]);
-                        storage.len += other.len;
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
+                other
+                    .and_then(|other| {
+                        let len = usize::from(storage.len);
+                        let other_len = usize::from(other.len);
+                        (len + other_len <= limit).then(|| {
+                            storage.memory32[len..len + other_len]
+                                .copy_from_slice(&other.memory32[..other_len]);
+                            storage.memory64[len..len + other_len]
+                                .copy_from_slice(&other.memory64[..other_len]);
+                            storage.len += other.len;
+                        })
+                    })
+                    .is_some()
             };
 
+        // Case is broken down as:
+        // * None => No field
+        // * Some(None) => Invalid storage (overflow)
+        // * Some(storage) => Valid storage
         let push_storage_variant_case =
             |storage: &mut FlatTypesStorage, case: Option<Option<FlatTypesStorage>>| -> bool {
-                if let Some(case) = case {
-                    if let Some(case) = case {
-                        // Discriminant will make size[case] = limit overshoot
-                        if case.len as usize >= limit {
-                            false
-                        } else {
-                            // Skip 1 for discriminant
-                            let dst = storage
-                                .memory32
-                                .iter_mut()
-                                .zip(&mut storage.memory64)
-                                .skip(1);
-                            for (i, ((t32, t64), (dst32, dst64))) in case
-                                .memory32
-                                .iter()
-                                .take(case.len as usize)
-                                .zip(case.memory64.iter())
-                                .zip(dst)
-                                .enumerate()
-                            {
-                                if i + 1 < usize::from(storage.len) {
-                                    // Populated Index
-                                    dst32.join(*t32);
-                                    dst64.join(*t64);
-                                } else {
-                                    // New Index
-                                    storage.len += 1;
-                                    *dst32 = *t32;
-                                    *dst64 = *t64;
+                match case {
+                    None => true,
+                    Some(case) => {
+                        case.and_then(|case| {
+                            // Discriminant will make size[case] = limit overshoot
+                            ((1 + case.len as usize) <= limit).then(|| {
+                                // Skip 1 for discriminant
+                                let dst = storage
+                                    .memory32
+                                    .iter_mut()
+                                    .zip(&mut storage.memory64)
+                                    .skip(1);
+                                for (i, ((t32, t64), (dst32, dst64))) in case
+                                    .memory32
+                                    .iter()
+                                    .take(case.len as usize)
+                                    .zip(case.memory64.iter())
+                                    .zip(dst)
+                                    .enumerate()
+                                {
+                                    if i + 1 < usize::from(storage.len) {
+                                        // Populated Index
+                                        dst32.join(*t32);
+                                        dst64.join(*t64);
+                                    } else {
+                                        // New Index
+                                        storage.len += 1;
+                                        *dst32 = *t32;
+                                        *dst64 = *t64;
+                                    }
                                 }
-                            }
-                            true
-                        }
-                    } else {
-                        true
+                            })
+                        })
+                        .is_some()
                     }
-                } else {
-                    false
                 }
             };
 
@@ -509,7 +511,7 @@ impl ComponentTypes {
             }
             InterfaceType::Option(i) => {
                 push_discrim(storage)
-                    && push_storage_variant_case(storage, Some(None))
+                    && push_storage_variant_case(storage, None)
                     && push_storage_variant_case(
                         storage,
                         Some(self.flat_types_storage_inner(&self[*i].ty, limit)),
