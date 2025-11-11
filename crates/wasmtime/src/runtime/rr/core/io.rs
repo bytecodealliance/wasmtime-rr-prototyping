@@ -2,9 +2,11 @@ use crate::prelude::*;
 use postcard;
 use serde::{Deserialize, Serialize};
 
+pub type IOError = postcard::Error;
+
 cfg_if::cfg_if! {
     if #[cfg(feature = "std")] {
-        use std::io::{Write, Read};
+        use std::io::{Write, Seek, Read};
         /// An [`Write`] usable for recording in RR
         ///
         /// This supports `no_std`, but must be [Send] and [Sync]
@@ -12,8 +14,8 @@ cfg_if::cfg_if! {
         impl<T: Write + Send + Sync> RecordWriter for T {}
 
         /// An [`Read`] usable for replaying in RR
-        pub trait ReplayReader: Read + Send + Sync {}
-        impl<T: Read + Send + Sync> ReplayReader for T {}
+        pub trait ReplayReader: Read + Seek + Send + Sync {}
+        impl<T: Read + Seek + Send + Sync> ReplayReader for T {}
 
     } else {
         // `no_std` configuration
@@ -28,8 +30,8 @@ cfg_if::cfg_if! {
         /// An [`Read`] usable for replaying in RR
         ///
         /// This supports `no_std`, but must be [Send] and [Sync]
-        pub trait ReplayReader: Read + Send + Sync {}
-        impl<T: Read + Send + Sync> ReplayReader for T {}
+        pub trait ReplayReader: Read + Seek + Send + Sync {}
+        impl<T: Read + Seek + Send + Sync> ReplayReader for T {}
     }
 }
 
@@ -55,7 +57,7 @@ where
 ///
 /// Currently uses `postcard` deserializer, with optional scratch
 /// buffer to deserialize into
-pub(super) fn from_replay_reader<'a, T, R>(reader: R, scratch: &'a mut [u8]) -> Result<T>
+pub(super) fn from_replay_reader<'a, T, R>(reader: R, scratch: &'a mut [u8]) -> Result<T, IOError>
 where
     T: Deserialize<'a>,
     R: ReplayReader + 'a,

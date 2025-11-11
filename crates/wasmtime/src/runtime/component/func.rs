@@ -534,7 +534,7 @@ impl Func {
     /// `LowerParams` and `LowerReturn` type. They must match the type of `self`
     /// for the params/results that are going to be produced. Additionally
     /// these types must be representable with a sequence of `ValRaw` values.
-    unsafe fn call_raw<T, Return, LowerParams, LowerReturn>(
+    pub(crate) unsafe fn call_raw<T, Return, LowerParams, LowerReturn>(
         &self,
         mut store: StoreContextMut<'_, T>,
         lower: impl FnOnce(
@@ -548,6 +548,19 @@ impl Func {
         LowerParams: Copy,
         LowerReturn: Copy,
     {
+        #[cfg(feature = "rr-component")]
+        {
+            use crate::rr::component_events::WasmFuncBeginEvent;
+
+            let component = *self.instance.id().get(store.0).component().checksum();
+            let instance = self.instance.id().instance();
+            let func_idx = self.index;
+            store.0.record_event(|| WasmFuncBeginEvent {
+                component,
+                instance,
+                func_idx,
+            })?;
+        }
         let export = self.lifted_core_func(store.0);
 
         #[repr(C)]
@@ -592,12 +605,11 @@ impl Func {
             ))
             .unwrap();
 
-            component_hooks::record_replay_wasm_func(
+            component_hooks::record_and_replay_validate_wasm_func(
                 |store| crate::Func::call_unchecked_raw(store, export, params_and_returns),
                 params_and_returns.as_ref(),
-                self.index,
                 self.abi_info(store.0).2,
-                self.instance.id(),
+                self.instance.id().get(store.0).component().types().clone(),
                 &mut store,
             )?;
         }
@@ -810,7 +822,7 @@ impl Func {
         Ok(())
     }
 
-    fn lift_results<'a, 'b>(
+    pub(crate) fn lift_results<'a, 'b>(
         cx: &'a mut LiftContext<'b>,
         results_ty: InterfaceType,
         src: &'a [ValRaw],
@@ -875,7 +887,7 @@ impl Func {
     /// The `lower` closure provided should perform the actual lowering and
     /// return the result of the lowering operation which is then returned from
     /// this function as well.
-    fn with_lower_context<T>(
+    pub(crate) fn with_lower_context<T>(
         self,
         mut store: StoreContextMut<T>,
         may_enter: bool,

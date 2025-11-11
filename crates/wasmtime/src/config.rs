@@ -110,6 +110,17 @@ impl ModuleVersionStrategy {
     }
 }
 
+/// Configuration for record/replay
+#[derive(Clone)]
+pub enum RRConfig {
+    /// Recording on store is enabled
+    Recording,
+    /// Replaying on store is enabled
+    Replaying,
+    /// No record/replay is enabled
+    None,
+}
+
 /// Global configuration options used to create an [`Engine`](crate::Engine)
 /// and customize its behavior.
 ///
@@ -175,9 +186,7 @@ pub struct Config {
     pub(crate) macos_use_mach_ports: bool,
     pub(crate) detect_host_feature: Option<fn(&str) -> Option<bool>>,
     #[cfg(feature = "rr")]
-    pub(crate) record_support: bool,
-    #[cfg(feature = "rr")]
-    pub(crate) replay_support: bool,
+    pub(crate) rr_config: RRConfig,
 }
 
 /// User-provided configuration for the compiler.
@@ -287,9 +296,7 @@ impl Config {
             #[cfg(not(feature = "std"))]
             detect_host_feature: None,
             #[cfg(feature = "rr")]
-            record_support: false,
-            #[cfg(feature = "rr")]
-            replay_support: false,
+            rr_config: RRConfig::None,
         };
         #[cfg(any(feature = "cranelift", feature = "winch"))]
         {
@@ -2705,11 +2712,9 @@ impl Config {
         self
     }
 
-    /// Enforce deterministic execution configurations. Currently, means the following:
+    /// Enforce deterministic execution configurations. Currently, this means the following:
     /// * Enabling NaN canonicalization with [`Config::cranelift_nan_canonicalization`]
     /// * Enabling deterministic relaxed SIMD with [`Config::relaxed_simd_deterministic`]
-    ///
-    /// Required for faithful record/replay execution.
     #[inline]
     pub fn enforce_determinism(&mut self) -> &mut Self {
         #[cfg(any(feature = "cranelift", feature = "winch"))]
@@ -2718,56 +2723,29 @@ impl Config {
         self
     }
 
-    /// Remove determinstic execution enforcements (if any) applied
-    /// by [`Config::enforce_determinism`].
-    #[inline]
-    pub fn remove_determinism_enforcement(&mut self) -> &mut Self {
-        #[cfg(any(feature = "cranelift", feature = "winch"))]
-        self.cranelift_nan_canonicalization(false);
-        self.relaxed_simd_deterministic(false);
-        self
-    }
-
-    /// Enable execution trace recording with the provided configuration.
+    /// Enable execution trace recording or replaying to the configuration
     ///
-    /// This method implicitly enforces determinism (see [`Config::enforce_determinism`]
-    /// for details).
+    /// When either recording/replaying are enabled, determinism is implicitly
+    /// enforced (see [`Config::enforce_determinism`] for details)
     #[cfg(feature = "rr")]
     #[inline]
-    pub fn recording(&mut self, enable: bool) -> &mut Self {
-        if enable {
-            self.enforce_determinism();
-        } else {
-            self.remove_determinism_enforcement();
+    pub fn rr(&mut self, cfg: RRConfig) -> &mut Self {
+        self.rr_config = cfg;
+        match self.rr_config {
+            RRConfig::Recording | RRConfig::Replaying => self.enforce_determinism(),
+            _ => self,
         }
-        self.record_support = enable;
-        self
-    }
-
-    /// Enable execution trace replaying with the provided configuration.
-    ///
-    /// This method implicitly enforces determinism (see [`Config::enforce_determinism`]
-    /// for details).
-    #[cfg(feature = "rr")]
-    #[inline]
-    pub fn replaying(&mut self, enable: bool) -> &mut Self {
-        if enable {
-            self.enforce_determinism();
-        } else {
-            self.remove_determinism_enforcement();
-        }
-        self.replay_support = enable;
-        self
     }
 
     /// Evaluates to true if current configuration must respect
     /// deterministic execution in its configuration.
-    ///
-    /// Required for faithful record/replay execution.
     #[cfg(feature = "rr")]
     #[inline]
     pub fn is_determinism_enforced(&mut self) -> bool {
-        self.record_support || self.replay_support
+        match self.rr_config {
+            RRConfig::Recording | RRConfig::Replaying => true,
+            RRConfig::None => false,
+        }
     }
 }
 

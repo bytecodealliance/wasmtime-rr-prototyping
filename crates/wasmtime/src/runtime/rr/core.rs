@@ -14,7 +14,7 @@ pub use events::Validate;
 pub use events::component_events;
 use events::{common_events, component_events as __component_events};
 pub use events::{core_events, marker_events};
-pub use io::{RecordWriter, ReplayReader};
+pub use io::{IOError, RecordWriter, ReplayReader};
 
 /// Settings for execution recording.
 #[cfg(feature = "rr")]
@@ -126,15 +126,20 @@ rr_event! {
     CustomMessage(marker_events::CustomMessageEvent),
 
     // Common events for both core or component wasm
-    /// Return from host function to either Core Wasm or component
+    /// Return from host function to either core Wasm or component
     HostFuncReturn(common_events::HostFuncReturnEvent),
 
-    /// Call into host function from Core Wasm
+    /// Call into host function from core Wasm
     CoreHostFuncEntry(core_events::HostFuncEntryEvent),
 
     // REQUIRED events for replay
 
-    /// Call into a Wasm component function from host
+    /// Starting marker for a Wasm component function call from host
+    ///
+    /// This is distinguished from `ComponentWasmFuncEntry` as there may
+    /// be multiple lowering steps before actually entering the Wasm function
+    ComponentWasmFuncBegin(__component_events::WasmFuncBeginEvent),
+    /// Entry from the host into the Wasm component function
     ComponentWasmFuncEntry(__component_events::WasmFuncEntryEvent),
     /// Instantiation of a component
     ComponentInstantiation(__component_events::InstantiationEvent),
@@ -187,17 +192,17 @@ pub enum ReplayError {
     FailedValidation,
     IncorrectEventVariant,
     InvalidOrdering,
+    FailedRead(IOError),
     EventError(Box<dyn EventError>),
+    MissingComponentOrModule,
+    MissingComponentOrModuleInstance,
 }
 
 impl fmt::Display for ReplayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyBuffer => {
-                write!(
-                    f,
-                    "replay buffer is empty (or unexpected read-failure encountered). Ensure sufficient `deserialization-buffer-size` in replay settings if you included `validation-metadata` during recording"
-                )
+                write!(f, "replay buffer is empty")
             }
             Self::FailedValidation => {
                 write!(f, "replay event validation failed")
@@ -208,8 +213,18 @@ impl fmt::Display for ReplayError {
             Self::EventError(e) => {
                 write!(f, "{:?}", e)
             }
+            Self::FailedRead(e) => {
+                write!(f, "{}", e)?;
+                f.write_str("Note: Ensure sufficient `deserialization-buffer-size` in replay settings if you included `validation-metadata` during recording")
+            }
             Self::InvalidOrdering => {
                 write!(f, "event occured at an invalid position in the trace")
+            }
+            Self::MissingComponentOrModule => {
+                write!(f, "missing component or module for replay")
+            }
+            Self::MissingComponentOrModuleInstance => {
+                write!(f, "missing component or module instance for replay")
             }
         }
     }
@@ -268,7 +283,7 @@ pub trait Recorder {
 
 /// This trait provides the interface for a FIFO replayer that
 /// essentially operates as an iterator over the recorded events
-pub trait Replayer: Iterator<Item = RREvent> {
+pub trait Replayer: Iterator<Item = Result<RREvent, ReplayError>> {
     /// Constructs a reader on buffer
     fn new_replayer(reader: impl ReplayReader + 'static, settings: ReplaySettings) -> Result<Self>
     where
@@ -280,20 +295,15 @@ pub trait Replayer: Iterator<Item = RREvent> {
     /// Get the settings (embedded within the trace) during recording
     fn trace_settings(&self) -> &RecordSettings;
 
+    ///// Peek at the next event without consuming it
+    //fn peek(&mut self) -> Option<Result<&RREvent, ReplayError>>;
+
     // Provided Methods
 
     /// Get the next functional replay event (skips past all non-marker events)
-    ///
-    /// ## Errors
-    ///
-    /// Returns a [`ReplayError::EmptyBuffer`] if the buffer is empty
     #[inline]
     fn next_event(&mut self) -> Result<RREvent, ReplayError> {
-        let event = self.next().ok_or(ReplayError::EmptyBuffer);
-        if let Ok(e) = &event {
-            log::debug!("Read replay event => {}", e);
-        }
-        event
+        self.next().ok_or(ReplayError::EmptyBuffer)?
     }
 
     /// Pop the next replay event with an attemped type conversion to expected
@@ -301,7 +311,7 @@ pub trait Replayer: Iterator<Item = RREvent> {
     ///
     /// ## Errors
     ///
-    /// See [`next_event_and`](Replayer::next_event_and)
+    /// Returns a  [`ReplayError::IncorrectEventVariant`] if it failed to convert typecheck event safely
     #[inline]
     fn next_event_typed<T>(&mut self) -> Result<T, ReplayError>
     where
@@ -315,8 +325,7 @@ pub trait Replayer: Iterator<Item = RREvent> {
     ///
     /// ## Errors
     ///
-    /// Returns a [`ReplayError::EmptyBuffer`] if the buffer is empty or a
-    /// [`ReplayError::IncorrectEventVariant`] if it failed to convert type safely
+    /// See [`next_event_typed`](Replayer::next_event_typed)
     #[inline]
     fn next_event_and<T, F>(&mut self, f: F) -> Result<(), ReplayError>
     where
@@ -436,18 +445,27 @@ pub struct ReplayBuffer {
     trace_settings: RecordSettings,
     /// Intermediate static buffer for deserialization
     deser_buffer: Vec<u8>,
+    /// Whether buffer has been completely read
+    eof_encountered: bool,
+    /// Peeked event for lookahead
+    peeked: Option<RREvent>,
 }
 
 impl Iterator for ReplayBuffer {
-    type Item = RREvent;
+    type Item = Result<RREvent, ReplayError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.eof_encountered {
+            return None;
+        }
+        if self.peeked.is_some() {
+            return self.peeked.take().map(Ok);
+        }
         let ret = 'event_loop: loop {
             let result = io::from_replay_reader(&mut self.reader, &mut self.deser_buffer);
             match result {
                 Err(e) => {
-                    log::error!("Erroneous replay read: {}", e);
-                    break 'event_loop None;
+                    break 'event_loop Some(Err(ReplayError::FailedRead(e)));
                 }
                 Ok(event) => {
                     if let RREvent::Eof = &event {
@@ -455,7 +473,8 @@ impl Iterator for ReplayBuffer {
                     } else if event.is_marker() {
                         continue 'event_loop;
                     } else {
-                        break 'event_loop Some(event);
+                        log::debug!("Read replay event => {}", event);
+                        break 'event_loop Some(Ok(event));
                     }
                 }
             }
@@ -466,15 +485,22 @@ impl Iterator for ReplayBuffer {
 
 impl Drop for ReplayBuffer {
     fn drop(&mut self) {
-        if let Some(event) = self.next() {
-            if let RREvent::Eof = event {
+        let mut remaining_events = 0;
+        // Cannot use count() in iterator because IO error may loop indefinitely
+        while let Some(event) = self.next() {
+            if let Ok(e) = event {
+                println!("Remaining event: {:?}", e);
             } else {
-                log::warn!(
-                    "Replay buffer is dropped with {} remaining events, 
-                    and is likely an invalid/incomplete execution",
-                    self.count()
-                );
-            }
+                event.unwrap();
+            };
+            remaining_events += 1;
+        }
+        if remaining_events > 0 {
+            log::warn!(
+                "Replay buffer is dropped with {} remaining events, 
+                and is likely an invalid/incomplete execution",
+                remaining_events
+            );
         }
     }
 }
@@ -510,6 +536,8 @@ impl Replayer for ReplayBuffer {
             settings,
             trace_settings,
             deser_buffer,
+            eof_encountered: false,
+            peeked: None,
         })
     }
 
@@ -522,6 +550,14 @@ impl Replayer for ReplayBuffer {
     fn trace_settings(&self) -> &RecordSettings {
         &self.trace_settings
     }
+
+    //#[inline]
+    //fn peek(&mut self) -> Option<Result<&RREvent, ReplayError>> {
+    //    if self.peeked.is_none() {
+    //        self.peeked = self.next();
+    //    }
+    //    self.peeked.as_ref().map(|r| Ok(r))
+    //}
 }
 
 #[cfg(test)]

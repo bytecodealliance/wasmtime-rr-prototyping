@@ -257,7 +257,7 @@ where
 
     let types = vminstance.component().types().clone();
 
-    rr::component_hooks::record_replay_host_func_entry(storage, &types, &ty, store.0)?;
+    rr::component_hooks::record_and_replay_validate_host_func_entry(storage, &types, &ty, store.0)?;
 
     let func_ty = &types[ty];
     let param_tys = InterfaceType::Tuple(func_ty.params);
@@ -813,7 +813,7 @@ where
 
     let types = instance.id().get(store.0).component().types().clone();
 
-    rr::component_hooks::record_replay_host_func_entry(storage, &types, &ty, store.0)?;
+    rr::component_hooks::record_and_replay_validate_host_func_entry(storage, &types, &ty, store.0)?;
 
     let func_ty = &types[ty];
     let param_tys = &types[func_ty.params];

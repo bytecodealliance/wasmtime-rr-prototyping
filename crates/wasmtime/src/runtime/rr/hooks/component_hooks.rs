@@ -1,7 +1,6 @@
 use crate::ValRaw;
 #[cfg(feature = "component-model")]
 use crate::component::func::LowerContext;
-use crate::component::store::StoreComponentInstanceId;
 #[cfg(feature = "rr-component")]
 use crate::rr::component_events::{
     HostFuncReturnEvent, LowerFlatReturnEvent, LowerMemoryReturnEvent, ResultEvent,
@@ -14,7 +13,7 @@ use crate::{StoreContextMut, prelude::*};
 use alloc::sync::Arc;
 use core::mem::MaybeUninit;
 #[cfg(feature = "component-model")]
-use wasmtime_environ::component::{ComponentTypes, ExportIndex, InterfaceType, TypeFuncIndex};
+use wasmtime_environ::component::{ComponentTypes, InterfaceType, TypeFuncIndex};
 #[cfg(all(feature = "rr-component"))]
 use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 
@@ -28,36 +27,30 @@ pub enum ReplayLoweringPhase {
 /// Record hook wrapping a wasm component export function invocation and replay
 /// validation of return value
 #[inline]
-pub fn record_replay_wasm_func<F, T>(
+pub fn record_and_replay_validate_wasm_func<F, T>(
     wasm_call: F,
     args: &[ValRaw],
-    func_idx: ExportIndex,
     type_idx: TypeFuncIndex,
-    id: StoreComponentInstanceId,
+    types: Arc<ComponentTypes>,
     store: &mut StoreContextMut<'_, T>,
 ) -> Result<()>
 where
     F: FnOnce(&mut StoreContextMut<'_, T>) -> Result<()>,
 {
-    let _ = (args, id, func_idx, type_idx);
+    let _ = (args, type_idx, &types);
     #[cfg(feature = "rr-component")]
     {
-        let component = id.get(store.0).component();
-        let types = component.types();
-        let checksum = *component.checksum();
         let flat_params = types.flat_types_storage(
             &InterfaceType::Tuple(types[type_idx].params),
             MAX_FLAT_PARAMS,
         );
         store
             .0
-            .record_event(|| WasmFuncEntryEvent::new(args, flat_params, checksum, func_idx))?;
+            .record_event(|| WasmFuncEntryEvent::new(args, flat_params))?;
     }
     let result = wasm_call(store);
     #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
     {
-        let component = id.get(store.0).component();
-        let types = component.types();
         let flat_results = types.flat_types_storage(
             &InterfaceType::Tuple(types[type_idx].results),
             MAX_FLAT_RESULTS,
@@ -80,7 +73,7 @@ where
 
 /// Record/replay hook operation for host function entry events
 #[inline]
-pub fn record_replay_host_func_entry(
+pub fn record_and_replay_validate_host_func_entry(
     args: &mut [MaybeUninit<ValRaw>],
     types: &Arc<ComponentTypes>,
     type_idx: &TypeFuncIndex,

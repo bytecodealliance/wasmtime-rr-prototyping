@@ -1,7 +1,7 @@
 //! Module comprising of component model wasm events
 
 use super::*;
-use crate::component::Component;
+use crate::component::ComponentInstanceId;
 use crate::vm::component::libcalls::ResourceDropRet;
 // Re-export common events from this module
 pub use common_events::*;
@@ -10,20 +10,24 @@ use wasmtime_environ::{
     component::{ExportIndex, FlatTypesStorage, InterfaceType, TypeFuncIndex},
 };
 
-/// A [`Component`] instantiatation event
+/// Beginning marker for a Wasm component function call from host
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InstantiationEvent {
-    /// A checksum of the component bytecode
-    component: [u8; 32],
+pub struct WasmFuncBeginEvent {
+    /// Checksum of component containing function
+    pub component: [u8; 32],
+    /// Instance ID for the component instance
+    pub instance: ComponentInstanceId,
+    /// Export index for the invoked function
+    pub func_idx: ExportIndex,
 }
 
-impl InstantiationEvent {
-    pub fn from_component(component: &Component) -> Self {
-        Self {
-            component: *component.checksum(),
-        }
-    }
-}
+/// A [`Component`] instantiatation event
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+pub struct InstantiationEvent(
+    /// Checksum of the bytecode used to instantiate the component
+    pub [u8; 32],
+    pub ComponentInstanceId,
+);
 
 /// A call event from Host into a Wasm component function
 ///
@@ -32,22 +36,12 @@ impl InstantiationEvent {
 pub struct WasmFuncEntryEvent {
     /// Raw values passed across call boundary
     args: RRFuncArgVals,
-    /// Checksum of component containing function
-    component: [u8; 32],
-    func_idx: ExportIndex,
 }
 impl WasmFuncEntryEvent {
     // Record
-    pub fn new(
-        args: &[ValRaw],
-        flat: FlatTypesStorage,
-        component: [u8; 32],
-        func_idx: ExportIndex,
-    ) -> Self {
+    pub fn new(args: &[ValRaw], flat: FlatTypesStorage) -> Self {
         Self {
             args: RRFuncArgVals::from_raw_slice(args, flat.iter32()),
-            component,
-            func_idx,
         }
     }
 

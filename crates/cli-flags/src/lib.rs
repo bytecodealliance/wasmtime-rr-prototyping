@@ -1027,7 +1027,7 @@ impl CommonOptions {
                     _v => (),
                     _ => err,
                 }
-                config.recording(true);
+                config.rr(wasmtime::RRConfig::Recording);
             },
             _ => err,
         }

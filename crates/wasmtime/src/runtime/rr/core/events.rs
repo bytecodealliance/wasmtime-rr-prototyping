@@ -96,8 +96,8 @@ impl RRFuncArgVals {
     where
         T: FlatBytes,
     {
-        let mut bytes = Vec::<u8>::new();
-        let mut sizes = Vec::<u8>::new();
+        let mut bytes = Vec::new();
+        let mut sizes = Vec::new();
         for (flat_size, arg) in flat.zip(args.iter()) {
             bytes.extend_from_slice(&arg.bytes_ref(flat_size));
             sizes.push(flat_size);

@@ -112,7 +112,7 @@ mod linker;
 mod matching;
 mod resource_table;
 mod resources;
-mod storage;
+pub(crate) mod storage;
 pub(crate) mod store;
 pub mod types;
 mod values;

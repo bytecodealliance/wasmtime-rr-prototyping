@@ -902,6 +902,13 @@ impl<'a> Instantiator<'a> {
         store.store_data_mut().component_instance_mut(self.id)
     }
 
+    /// Convenience helper to return the instance ID of the `ComponentInstance` that's
+    /// being instantiated
+    #[cfg(feature = "rr-component")]
+    fn id(&self) -> ComponentInstanceId {
+        self.id
+    }
+
     // NB: This method is only intended to be called during the instantiation
     // process because the `Arc::get_mut` here is fallible and won't generally
     // succeed once the instance has been handed to the embedder. Before that
@@ -1016,23 +1023,18 @@ impl<T: 'static> InstancePre<T> {
 
     fn instantiate_impl(&self, mut store: impl AsContextMut<Data = T>) -> Result<Instance> {
         let mut store = store.as_context_mut();
-        #[cfg(feature = "rr-component")]
-        {
-            use crate::rr::{Validate, component_events::InstantiationEvent};
-            store
-                .0
-                .record_event(|| InstantiationEvent::from_component(&self.component))?;
-            // This is a required validation check for functional correctness, so don't use
-            // [`StoreOpaque::next_replay_event_validation`]
-            store.0.next_replay_event_and(|event: InstantiationEvent| {
-                event.validate(&InstantiationEvent::from_component(&self.component))
-            })?;
-        }
         store
             .engine()
             .allocator()
             .increment_component_instance_count()?;
         let mut instantiator = Instantiator::new(&self.component, store.0, &self.imports);
+        #[cfg(feature = "rr-component")]
+        {
+            use crate::rr::component_events::InstantiationEvent;
+            store.0.record_event(|| {
+                InstantiationEvent(*self.component.checksum(), instantiator.id())
+            })?;
+        }
         instantiator.run(&mut store).map_err(|e| {
             store
                 .engine()

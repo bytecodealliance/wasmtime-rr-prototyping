@@ -3,6 +3,7 @@ use crate::store::{StoreData, StoreId, StoreOpaque};
 #[cfg(feature = "component-model-async")]
 use alloc::vec::Vec;
 use core::pin::Pin;
+use serde::{Deserialize, Serialize};
 use wasmtime_environ::PrimaryMap;
 
 #[derive(Default)]
@@ -10,7 +11,7 @@ pub struct ComponentStoreData {
     instances: PrimaryMap<ComponentInstanceId, Option<OwnedComponentInstance>>,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct ComponentInstanceId(u32);
 wasmtime_environ::entity_impl!(ComponentInstanceId);
 

@@ -1498,8 +1498,8 @@ impl StoreOpaque {
             "replaying store must not initialize any modules"
         );
         ensure!(
-            !self.engine().is_recording(),
-            "store recording cannot be enabled when initializing replay"
+            self.engine().is_replaying(),
+            "store replaying requires replaying enabled on config"
         );
         self.replay_buffer = Some(ReplayBuffer::new_replayer(replayer, settings)?);
         Ok(())
