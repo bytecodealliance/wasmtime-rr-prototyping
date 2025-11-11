@@ -24,8 +24,8 @@ pub struct ReplayOptions {
     pub validate: bool,
 
     /// Size of static buffer needed to deserialized variable-length types like String. This is not
-    /// not relevant for basic functional recording/replaying, but may be required to replay traces where
-    /// `validation-metadata` was enabled for recording
+    /// not important for basic functional recording/replaying, but may be required to replay traces where
+    /// `validate` was enabled for recording
     #[arg(short, long, default_value_t = 64)]
     pub deser_buffer_size: usize,
 }

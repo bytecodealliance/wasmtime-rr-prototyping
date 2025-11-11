@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use wasi_common::sync::{Dir, TcpListener, WasiCtxBuilder, ambient_authority};
+#[cfg(feature = "rr")]
+use wasmtime::ReplayEnvironment;
 use wasmtime::{Engine, Func, Module, Store, StoreLimits, Val, ValType};
 use wasmtime_wasi::{WasiCtxView, WasiView};
 
@@ -100,7 +102,16 @@ impl RunCommand {
         self.run.common.init_logging()?;
 
         let mut config = self.run.common.config(None)?;
+        #[cfg(not(feature = "rr"))]
         config.async_support(true);
+        #[cfg(feature = "rr")]
+        if replay_opts.is_some() {
+            // Replay does not support async yet
+            config.async_support(false);
+            config.rr(wasmtime::RRConfig::Replaying);
+        } else {
+            config.async_support(true);
+        }
 
         if self.run.common.wasm.timeout.is_some() {
             config.epoch_interruption(true);
@@ -114,11 +125,6 @@ impl RunCommand {
                 config.epoch_interruption(true);
             }
             None => {}
-        }
-
-        #[cfg(feature = "rr")]
-        if replay_opts.is_some() {
-            config.replaying(true);
         }
 
         let engine = Engine::new(&config)?;
@@ -167,7 +173,13 @@ impl RunCommand {
         };
 
         let mut store = Store::new(&engine, host);
+        #[cfg(not(feature = "rr"))]
         self.populate_with_wasi(&mut linker, &mut store, &main)?;
+        // For replay, we don't populate WASI
+        #[cfg(feature = "rr")]
+        if !replay_opts.is_some() {
+            self.populate_with_wasi(&mut linker, &mut store, &main)?;
+        }
 
         store.data_mut().limits = self.run.store_limits();
         store.limiter(|t| &mut t.limits);
@@ -180,6 +192,33 @@ impl RunCommand {
 
         #[cfg(feature = "rr")]
         {
+            // If this is a replay run, skip to replay setup and run to completion
+            //
+            // Note: Right now, replay doesn't inherit any store settings listed
+            // above. This will have to change in the future. In general, replays will
+            // need an "almost exact" superset of the run configurations, but with
+            // certain different options (e.g. fuel consumption).
+            if let Some(opts) = replay_opts {
+                let settings = ReplaySettings {
+                    validate: opts.validate,
+                    deser_buffer_size: opts.deser_buffer_size,
+                    ..Default::default()
+                };
+
+                let mut renv = ReplayEnvironment::new(&engine, settings);
+                match main {
+                    RunTarget::Core(m) => {
+                        renv.add_module(m);
+                    }
+                    RunTarget::Component(c) => {
+                        renv.add_component(c);
+                    }
+                }
+                let mut instance = renv.instantiate(BufReader::new(fs::File::open(opts.trace)?))?;
+                return instance.run_to_completion();
+            }
+
+            // Recording settings for this execution's store
             let record = &self.run.common.record;
             if let Some(path) = &record.path {
                 let default_settings = RecordSettings::default();
@@ -196,18 +235,6 @@ impl RunCommand {
                 } else {
                     store.init_recording(fs::File::create(&path)?, settings)?;
                 }
-            }
-
-            if let Some(opts) = replay_opts {
-                let settings = ReplaySettings {
-                    validate: opts.validate,
-                    deser_buffer_size: opts.deser_buffer_size,
-                    ..Default::default()
-                };
-                store.init_replaying(
-                    BufReader::new(fs::File::open(opts.trace).unwrap()),
-                    settings,
-                )?;
             }
         }
 

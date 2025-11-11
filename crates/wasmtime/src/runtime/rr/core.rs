@@ -488,11 +488,7 @@ impl Drop for ReplayBuffer {
         let mut remaining_events = 0;
         // Cannot use count() in iterator because IO error may loop indefinitely
         while let Some(event) = self.next() {
-            if let Ok(e) = event {
-                println!("Remaining event: {:?}", e);
-            } else {
-                event.unwrap();
-            };
+            event.unwrap();
             remaining_events += 1;
         }
         if remaining_events > 0 {

@@ -2,8 +2,9 @@ use crate::component::{self, Component, Val};
 #[cfg(feature = "rr-component")]
 use crate::rr::component_events;
 use crate::rr::{RREvent, ReplayError, Validate, component_hooks::ReplayLoweringPhase};
-use crate::{AsContextMut, Engine, ReplayReader, ReplaySettings, Store};
-use crate::{Module, ValRaw, prelude::*};
+use crate::{
+    AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, ValRaw, prelude::*,
+};
 use alloc::collections::BTreeMap;
 use core::mem::MaybeUninit;
 #[cfg(feature = "rr-component")]
