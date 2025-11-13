@@ -635,7 +635,9 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                 RREvent::ComponentLowerFlatReturn(e) => {
                     #[cfg(feature = "rr-validate")]
                     if run_validate {
-                        _lower_stack.pop().ok_or(ReplayError::InvalidOrdering)?;
+                        _lower_stack
+                            .pop()
+                            .ok_or(ReplayError::InvalidEventPosition)?;
                     }
                     lowering_error = e.0.ret().map_err(Into::into).err();
                 }
@@ -644,7 +646,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                     if run_validate {
                         _lower_store_stack
                             .pop()
-                            .ok_or(ReplayError::InvalidOrdering)?;
+                            .ok_or(ReplayError::InvalidEventPosition)?;
                     }
                     lowering_error = e.0.ret().map_err(Into::into).err();
                 }

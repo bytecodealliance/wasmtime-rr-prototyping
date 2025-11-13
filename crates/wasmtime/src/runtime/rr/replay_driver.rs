@@ -120,7 +120,7 @@ impl<'a> ReplayInstance<'a> {
                         let component = self
                             .components
                             .get(&event.0)
-                            .ok_or(ReplayError::MissingComponentOrModule)?;
+                            .ok_or(ReplayError::MissingComponent(event.0))?;
 
                         let instance = self
                             .component_linker
@@ -151,7 +151,7 @@ impl<'a> ReplayInstance<'a> {
                         let instance = self
                             .component_instances
                             .get_mut(&key)
-                            .ok_or(ReplayError::MissingComponentOrModuleInstance)?;
+                            .ok_or(ReplayError::MissingComponentInstance(key.1.as_u32()))?;
 
                         // Replay lowering steps and obtain raw value arguments to raw function call
                         let func = component::Func::from_lifted_func(*instance, event.func_idx);
@@ -202,7 +202,7 @@ impl<'a> ReplayInstance<'a> {
                     let module = self
                         .modules
                         .get(&event.0)
-                        .ok_or(ReplayError::MissingComponentOrModule)?;
+                        .ok_or(ReplayError::MissingModule(event.0))?;
 
                     let instance = self
                         .module_linker
@@ -224,14 +224,14 @@ impl<'a> ReplayInstance<'a> {
                     let instance = self
                         .module_instances
                         .get_mut(&key)
-                        .ok_or(ReplayError::MissingComponentOrModule)?;
+                        .ok_or(ReplayError::MissingModuleInstance(key.1.as_u32()))?;
 
                     let entity = EntityIndex::from(event.origin.index);
                     let mut store = self.store.as_context_mut();
                     let func = instance
                         ._get_export(store.0, entity)
                         .into_func()
-                        .ok_or(ReplayError::IncorrectCoreFuncIndex)?;
+                        .ok_or(ReplayError::InvalidCoreFuncIndex(entity))?;
 
                     let params_ty = func.ty(&store).params().collect::<Vec<ValType>>();
 

@@ -3,6 +3,7 @@ use crate::prelude::*;
 use core::fmt;
 use events::EventError;
 use serde::{Deserialize, Serialize};
+use wasmtime_environ::EntityIndex;
 // Use component events internally even without feature flags enabled
 // so that [`RREvent`] has a well-defined serialization format, but export
 // it for other modules only when enabled
@@ -198,12 +199,14 @@ pub enum ReplayError {
     EmptyBuffer,
     FailedValidation,
     IncorrectEventVariant,
-    InvalidOrdering,
+    InvalidEventPosition,
     FailedRead(IOError),
     EventError(Box<dyn EventError>),
-    MissingComponentOrModule,
-    MissingComponentOrModuleInstance,
-    IncorrectCoreFuncIndex,
+    MissingComponent([u8; 32]),
+    MissingModule([u8; 32]),
+    MissingComponentInstance(u32),
+    MissingModuleInstance(u32),
+    InvalidCoreFuncIndex(EntityIndex),
 }
 
 impl fmt::Display for ReplayError {
@@ -213,10 +216,13 @@ impl fmt::Display for ReplayError {
                 write!(f, "replay buffer is empty")
             }
             Self::FailedValidation => {
-                write!(f, "replay event validation failed")
+                write!(
+                    f,
+                    "failed validation check during replay; see wasmtime log for error"
+                )
             }
             Self::IncorrectEventVariant => {
-                write!(f, "event method invoked on incorrect variant")
+                write!(f, "event type mismatch during replay")
             }
             Self::EventError(e) => {
                 write!(f, "{:?}", e)
@@ -225,17 +231,37 @@ impl fmt::Display for ReplayError {
                 write!(f, "{}", e)?;
                 f.write_str("Note: Ensure sufficient `deserialization-buffer-size` in replay settings if you included `validation-metadata` during recording")
             }
-            Self::InvalidOrdering => {
+            Self::InvalidEventPosition => {
                 write!(f, "event occured at an invalid position in the trace")
             }
-            Self::MissingComponentOrModule => {
-                write!(f, "missing component or module for replay")
+            Self::MissingComponent(checksum) => {
+                write!(
+                    f,
+                    "missing component binary with checksum 0x{} during replay",
+                    checksum
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>()
+                )
             }
-            Self::MissingComponentOrModuleInstance => {
-                write!(f, "missing component or module instance for replay")
+            Self::MissingModule(checksum) => {
+                write!(
+                    f,
+                    "missing module binary with checksum {:02x?} during replay",
+                    checksum
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>()
+                )
             }
-            Self::IncorrectCoreFuncIndex => {
-                write!(f, "incorrect core function index encountered during replay")
+            Self::MissingComponentInstance(id) => {
+                write!(f, "missing component instance ID {:?} during replay", id)
+            }
+            Self::MissingModuleInstance(id) => {
+                write!(f, "missing module instance ID {:?} during replay", id)
+            }
+            Self::InvalidCoreFuncIndex(index) => {
+                write!(f, "replay core func ({:?}) during replay is invalid", index)
             }
         }
     }
@@ -305,9 +331,6 @@ pub trait Replayer: Iterator<Item = Result<RREvent, ReplayError>> {
 
     /// Get the settings (embedded within the trace) during recording
     fn trace_settings(&self) -> &RecordSettings;
-
-    ///// Peek at the next event without consuming it
-    //fn peek(&mut self) -> Option<Result<&RREvent, ReplayError>>;
 
     // Provided Methods
 
@@ -458,8 +481,6 @@ pub struct ReplayBuffer {
     deser_buffer: Vec<u8>,
     /// Whether buffer has been completely read
     eof_encountered: bool,
-    /// Peeked event for lookahead
-    peeked: Option<RREvent>,
 }
 
 impl Iterator for ReplayBuffer {
@@ -468,9 +489,6 @@ impl Iterator for ReplayBuffer {
     fn next(&mut self) -> Option<Self::Item> {
         if self.eof_encountered {
             return None;
-        }
-        if self.peeked.is_some() {
-            return self.peeked.take().map(Ok);
         }
         let ret = 'event_loop: loop {
             let result = io::from_replay_reader(&mut self.reader, &mut self.deser_buffer);
@@ -499,17 +517,17 @@ impl Drop for ReplayBuffer {
         let mut remaining_events = 0;
         log::info!("Replay buffer is being dropped; checking for remaining replay events...");
         // Cannot use count() in iterator because IO error may loop indefinitely
-        while let Some(event) = self.next() {
-            event.unwrap();
+        while let Some(e) = self.next() {
+            e.unwrap();
             remaining_events += 1;
         }
         if remaining_events > 0 {
             log::warn!(
-                "{} events were remaining in the replay buffer. This is likely the result of an erroneous/incomplete execution",
+                "{} events were not used in the replay buffer. This is likely the result of an erroneous/incomplete execution",
                 remaining_events
             );
         } else {
-            log::info!("All replay events were successfully processed.");
+            log::debug!("All replay events were successfully processed.");
         }
     }
 }
@@ -546,7 +564,6 @@ impl Replayer for ReplayBuffer {
             trace_settings,
             deser_buffer,
             eof_encountered: false,
-            peeked: None,
         })
     }
 
@@ -559,14 +576,6 @@ impl Replayer for ReplayBuffer {
     fn trace_settings(&self) -> &RecordSettings {
         &self.trace_settings
     }
-
-    //#[inline]
-    //fn peek(&mut self) -> Option<Result<&RREvent, ReplayError>> {
-    //    if self.peeked.is_none() {
-    //        self.peeked = self.next();
-    //    }
-    //    self.peeked.as_ref().map(|r| Ok(r))
-    //}
 }
 
 #[cfg(test)]
