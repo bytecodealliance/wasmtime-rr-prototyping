@@ -56,6 +56,26 @@ impl ReplayEnvironment {
 ///
 /// Debugger capabilities in the future will interact with this object for
 /// inserting breakpoints, snapshotting, and restoring state
+///
+/// # Example
+///
+/// ```
+/// use wasmtime::*;
+/// use wasmtime::component::Component;
+///
+/// fn main() -> Result<()> {
+///     let config = Config::new();
+///     config.rr(RRConfig::Recording);
+///     let engine = Engine::new(&config)?;
+///     let mut renv = ReplayEnvironment::new(&engine, ReplaySettings::default());
+///     renv.add_component(Component::from_file(&engine, /* path to component file */)?);
+///     // You can add more components, or modules with renv.add_module(module);
+///     // ....
+///     let mut instance = renv.instantiate(BufReader::new(/* path to trace file */))?;
+///     instance.run_to_completion()?;
+///     Ok(())
+/// }
+/// ```
 pub struct ReplayInstance<'a> {
     /// The store doesn't need any host data because the trace format and
     /// replay is designed to be embedding-agnostic
@@ -97,74 +117,66 @@ impl<'a> ReplayInstance<'a> {
         })
     }
 
-    /// Run this replay instance to completion
-    pub fn run_to_completion(&mut self) -> Result<()> {
-        while let Some(rr_event) = self
-            .store
-            .as_context_mut()
-            .0
-            .replay_buffer_mut()
-            .expect("unexpected; replay buffer must be initialized within an instance")
-            .next()
-        {
-            // The only valid "top-level" events are:
-            // * Instantiation events (component/module)
-            // * Wasm function begin events (`ComponentWasmFuncBegin` for components and `CoreWasmFuncEntry` for core)
-            //
-            // All other events are transparently dispatched under the context of these top-level events
-            match rr_event? {
-                RREvent::ComponentInstantiation(event) => {
-                    #[cfg(feature = "rr-component")]
-                    {
-                        // Find matching component from environment to instantiate
-                        let component = self
-                            .components
-                            .get(&event.0)
-                            .ok_or(ReplayError::MissingComponent(event.0))?;
+    /// Run a single top-level event from the instance
+    ///
+    /// "Top-level" events are those explicitly invoked events, namely:
+    /// * Instantiation events (component/module)
+    /// * Wasm function begin events (`ComponentWasmFuncBegin` for components and `CoreWasmFuncEntry` for core)
+    ///
+    /// All other events are transparently dispatched under the context of these top-level events
+    pub fn run_single_top_level_event(&mut self, rr_event: RREvent) -> Result<()> {
+        match rr_event {
+            RREvent::ComponentInstantiation(event) => {
+                #[cfg(feature = "rr-component")]
+                {
+                    // Find matching component from environment to instantiate
+                    let component = self
+                        .components
+                        .get(&event.0)
+                        .ok_or(ReplayError::MissingComponent(event.0))?;
 
-                        let instance = self
-                            .component_linker
-                            .instantiate(self.store.as_context_mut(), component)?;
-                        // Validate the instantiation event
-                        event.validate(&component_events::InstantiationEvent(
-                            *component.checksum(),
-                            instance.id().instance(),
-                        ))?;
+                    let instance = self
+                        .component_linker
+                        .instantiate(self.store.as_context_mut(), component)?;
+                    // Validate the instantiation event
+                    event.validate(&component_events::InstantiationEvent(
+                        *component.checksum(),
+                        instance.id().instance(),
+                    ))?;
 
-                        let ret = self.component_instances.insert(event, instance);
-                        // Ensures that an already-instantiated configuration is not re-instantiated
-                        assert!(ret.is_none());
-                    }
-                    #[cfg(not(feature = "rr-component"))]
-                    {
-                        anyhow!(
-                            "Cannot parse ComponentInstantation replay event without rr-component feature enabled"
-                        );
-                    }
+                    let ret = self.component_instances.insert(event, instance);
+                    // Ensures that an already-instantiated configuration is not re-instantiated
+                    assert!(ret.is_none());
                 }
-                RREvent::ComponentWasmFuncBegin(event) => {
-                    #[cfg(feature = "rr-component")]
-                    {
-                        // Grab the correct component instance
-                        let key =
-                            component_events::InstantiationEvent(event.component, event.instance);
-                        let instance = self
-                            .component_instances
-                            .get_mut(&key)
-                            .ok_or(ReplayError::MissingComponentInstance(key.1.as_u32()))?;
+                #[cfg(not(feature = "rr-component"))]
+                {
+                    anyhow!(
+                        "Cannot parse ComponentInstantation replay event without rr-component feature enabled"
+                    );
+                }
+            }
+            RREvent::ComponentWasmFuncBegin(event) => {
+                #[cfg(feature = "rr-component")]
+                {
+                    // Grab the correct component instance
+                    let key = component_events::InstantiationEvent(event.component, event.instance);
+                    let instance = self
+                        .component_instances
+                        .get_mut(&key)
+                        .ok_or(ReplayError::MissingComponentInstance(key.1.as_u32()))?;
 
-                        // Replay lowering steps and obtain raw value arguments to raw function call
-                        let func = component::Func::from_lifted_func(*instance, event.func_idx);
-                        let store = self.store.as_context_mut();
+                    // Replay lowering steps and obtain raw value arguments to raw function call
+                    let func = component::Func::from_lifted_func(*instance, event.func_idx);
+                    let store = self.store.as_context_mut();
 
-                        // Call the function
-                        //
-                        // This is almost a mirror of the usage in [`component::Func::call_impl`]
-                        let mut results_storage = [component::Val::U64(0); MAX_FLAT_RESULTS];
-                        let mut num_results = 0;
-                        let results = &mut results_storage;
-                        let _return = unsafe {
-                            func.call_raw(
+                    // Call the function
+                    //
+                    // This is almost a mirror of the usage in [`component::Func::call_impl`]
+                    let mut results_storage = [component::Val::U64(0); MAX_FLAT_RESULTS];
+                    let mut num_results = 0;
+                    let results = &mut results_storage;
+                    let _return = unsafe {
+                        func.call_raw(
                                 store,
                                 |cx, _, dst: &mut MaybeUninit<[MaybeUninit<ValRaw>; MAX_FLAT_PARAMS]>| {
                                     // For lowering, use replay instead of actual lowering
@@ -182,78 +194,87 @@ impl<'a> ReplayInstance<'a> {
                                     Ok(())
                                 },
                             )?
-                        };
+                    };
 
-                        log::info!(
-                            "Returned {:?} for calling {:?}",
-                            &results_storage[..num_results],
-                            func
-                        );
-                    }
-                    #[cfg(not(feature = "rr-component"))]
-                    {
-                        anyhow!(
-                            "Cannot parse ComponentWasmFuncBegin replay event without rr-component feature enabled"
-                        );
-                    }
+                    log::info!(
+                        "Returned {:?} for calling {:?}",
+                        &results_storage[..num_results],
+                        func
+                    );
                 }
-                RREvent::CoreWasmInstantiation(event) => {
-                    // Find matching module from environment to instantiate
-                    let module = self
-                        .modules
-                        .get(&event.0)
-                        .ok_or(ReplayError::MissingModule(event.0))?;
-
-                    let instance = self
-                        .module_linker
-                        .instantiate(self.store.as_context_mut(), module)?;
-
-                    // Validate the instantiation event
-                    event.validate(&core_events::InstantiationEvent(
-                        *module.checksum(),
-                        instance.id(),
-                    ))?;
-
-                    let ret = self.module_instances.insert(event, instance);
-                    // Ensures that an already-instantiated configuration is not re-instantiated
-                    assert!(ret.is_none());
+                #[cfg(not(feature = "rr-component"))]
+                {
+                    anyhow!(
+                        "Cannot parse ComponentWasmFuncBegin replay event without rr-component feature enabled"
+                    );
                 }
-                RREvent::CoreWasmFuncEntry(event) => {
-                    // Grab the correct module instance
-                    let key = core_events::InstantiationEvent(event.module, event.origin.instance);
-                    let instance = self
-                        .module_instances
-                        .get_mut(&key)
-                        .ok_or(ReplayError::MissingModuleInstance(key.1.as_u32()))?;
-
-                    let entity = EntityIndex::from(event.origin.index);
-                    let mut store = self.store.as_context_mut();
-                    let func = instance
-                        ._get_export(store.0, entity)
-                        .into_func()
-                        .ok_or(ReplayError::InvalidCoreFuncIndex(entity))?;
-
-                    let params_ty = func.ty(&store).params().collect::<Vec<ValType>>();
-
-                    // Obtain the argument values for function call
-                    let mut results = vec![crate::Val::I64(0); func.ty(&store).results().len()];
-                    let params = event.to_val_vec(&mut store, params_ty);
-
-                    // Call the function
-                    //
-                    // This is almost a mirror of the usage in [`crate::Func::call`] or [`crate::Func::call_async`]
-                    func.call_impl_check_args(&mut store, &params, &mut results)?;
-                    unsafe {
-                        func.call_impl_do_call(
-                            &mut store,
-                            params.as_slice(),
-                            results.as_mut_slice(),
-                        )?;
-                    }
-                }
-
-                _ => Err(ReplayError::IncorrectEventVariant)?,
             }
+            RREvent::CoreWasmInstantiation(event) => {
+                // Find matching module from environment to instantiate
+                let module = self
+                    .modules
+                    .get(&event.0)
+                    .ok_or(ReplayError::MissingModule(event.0))?;
+
+                let instance = self
+                    .module_linker
+                    .instantiate(self.store.as_context_mut(), module)?;
+
+                // Validate the instantiation event
+                event.validate(&core_events::InstantiationEvent(
+                    *module.checksum(),
+                    instance.id(),
+                ))?;
+
+                let ret = self.module_instances.insert(event, instance);
+                // Ensures that an already-instantiated configuration is not re-instantiated
+                assert!(ret.is_none());
+            }
+            RREvent::CoreWasmFuncEntry(event) => {
+                // Grab the correct module instance
+                let key = core_events::InstantiationEvent(event.module, event.origin.instance);
+                let instance = self
+                    .module_instances
+                    .get_mut(&key)
+                    .ok_or(ReplayError::MissingModuleInstance(key.1.as_u32()))?;
+
+                let entity = EntityIndex::from(event.origin.index);
+                let mut store = self.store.as_context_mut();
+                let func = instance
+                    ._get_export(store.0, entity)
+                    .into_func()
+                    .ok_or(ReplayError::InvalidCoreFuncIndex(entity))?;
+
+                let params_ty = func.ty(&store).params().collect::<Vec<ValType>>();
+
+                // Obtain the argument values for function call
+                let mut results = vec![crate::Val::I64(0); func.ty(&store).results().len()];
+                let params = event.to_val_vec(&mut store, params_ty);
+
+                // Call the function
+                //
+                // This is almost a mirror of the usage in [`crate::Func::call`] or [`crate::Func::call_async`]
+                func.call_impl_check_args(&mut store, &params, &mut results)?;
+                unsafe {
+                    func.call_impl_do_call(&mut store, params.as_slice(), results.as_mut_slice())?;
+                }
+            }
+
+            _ => Err(ReplayError::IncorrectEventVariant)?,
+        }
+        Ok(())
+    }
+    /// Run this replay instance to completion
+    pub fn run_to_completion(&mut self) -> Result<()> {
+        while let Some(rr_event) = self
+            .store
+            .as_context_mut()
+            .0
+            .replay_buffer_mut()
+            .expect("unexpected; replay buffer must be initialized within an instance")
+            .next()
+        {
+            self.run_single_top_level_event(rr_event?)?;
         }
         Ok(())
     }
