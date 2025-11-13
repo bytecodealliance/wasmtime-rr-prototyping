@@ -52,6 +52,9 @@ pub struct CompiledModuleInfo {
 
     /// General compilation metadata.
     pub meta: Metadata,
+
+    /// Checksum of the source Wasm binary from which this module was compiled
+    pub checksum: [u8; 32],
 }
 
 /// The name of a function stored in the

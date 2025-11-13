@@ -157,6 +157,9 @@ struct ModuleInner {
 
     /// Runtime offset information for `VMContext`.
     offsets: VMOffsets<HostPtr>,
+
+    /// The SHA-256 checksum of the source binary
+    checksum: [u8; 32],
 }
 
 impl fmt::Debug for Module {
@@ -526,6 +529,7 @@ impl Module {
         info: CompiledModuleInfo,
         serializable: bool,
     ) -> Result<Self> {
+        let checksum = info.checksum;
         let module =
             CompiledModule::from_artifacts(code.code_memory().clone(), info, engine.profiler())?;
 
@@ -546,6 +550,7 @@ impl Module {
                 #[cfg(any(feature = "cranelift", feature = "winch"))]
                 serializable,
                 offsets,
+                checksum,
             }),
         })
     }
@@ -878,6 +883,15 @@ impl Module {
     /// Returns the [`Engine`] that this [`Module`] was compiled by.
     pub fn engine(&self) -> &Engine {
         &self.inner.engine
+    }
+
+    #[allow(
+        unused,
+        reason = "used only for verification with wasmtime `rr` feature \
+        and requires a lot of unnecessary gating across crates"
+    )]
+    pub(crate) fn checksum(&self) -> &[u8; 32] {
+        &self.inner.checksum
     }
 
     /// Returns a summary of the resources required to instantiate this

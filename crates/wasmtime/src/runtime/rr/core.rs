@@ -12,8 +12,8 @@ pub use events::RRFuncArgVals;
 pub use events::Validate;
 #[cfg(feature = "rr-component")]
 pub use events::component_events;
+pub use events::{ResultEvent, core_events, marker_events};
 use events::{common_events, component_events as __component_events};
-pub use events::{core_events, marker_events};
 pub use io::{IOError, RecordWriter, ReplayReader};
 
 /// Settings for execution recording.
@@ -126,13 +126,22 @@ rr_event! {
     CustomMessage(marker_events::CustomMessageEvent),
 
     // Common events for both core or component wasm
-    /// Return from host function to either core Wasm or component
+    // REQUIRED events
+    /// Return from host function (core or component) to host
     HostFuncReturn(common_events::HostFuncReturnEvent),
+    // OPTIONAL events
+    /// Return from Wasm function (core or component) to host
+    WasmFuncReturn(common_events::WasmFuncReturnEvent),
 
+    // REQUIRED events for replay (Core)
+    /// Instantiation of a core Wasm module
+    CoreWasmInstantiation(core_events::InstantiationEvent),
+    /// Entry from host into a core Wasm function
+    CoreWasmFuncEntry(core_events::WasmFuncEntryEvent),
     /// Call into host function from core Wasm
     CoreHostFuncEntry(core_events::HostFuncEntryEvent),
 
-    // REQUIRED events for replay
+    // REQUIRED events for replay (Component)
 
     /// Starting marker for a Wasm component function call from host
     ///
@@ -154,10 +163,8 @@ rr_event! {
     /// Return from a component builtin
     ComponentBuiltinReturn(__component_events::BuiltinReturnEvent),
 
-    // OPTIONAL events for replay validation
+    // OPTIONAL events for replay validation (Component)
 
-    /// Return from a Wasm component function back to host
-    ComponentWasmFuncReturn(__component_events::WasmFuncReturnEvent),
     /// Return from Component ABI realloc call
     ///
     /// Since realloc is deterministic, ReallocReturn is optional.
@@ -196,6 +203,7 @@ pub enum ReplayError {
     EventError(Box<dyn EventError>),
     MissingComponentOrModule,
     MissingComponentOrModuleInstance,
+    IncorrectCoreFuncIndex,
 }
 
 impl fmt::Display for ReplayError {
@@ -225,6 +233,9 @@ impl fmt::Display for ReplayError {
             }
             Self::MissingComponentOrModuleInstance => {
                 write!(f, "missing component or module instance for replay")
+            }
+            Self::IncorrectCoreFuncIndex => {
+                write!(f, "incorrect core function index encountered during replay")
             }
         }
     }
@@ -486,6 +497,7 @@ impl Iterator for ReplayBuffer {
 impl Drop for ReplayBuffer {
     fn drop(&mut self) {
         let mut remaining_events = 0;
+        log::info!("Replay buffer is being dropped; checking for remaining replay events...");
         // Cannot use count() in iterator because IO error may loop indefinitely
         while let Some(event) = self.next() {
             event.unwrap();
@@ -493,10 +505,11 @@ impl Drop for ReplayBuffer {
         }
         if remaining_events > 0 {
             log::warn!(
-                "Replay buffer is dropped with {} remaining events, 
-                and is likely an invalid/incomplete execution",
+                "{} events were remaining in the replay buffer. This is likely the result of an erroneous/incomplete execution",
                 remaining_events
             );
+        } else {
+            log::info!("All replay events were successfully processed.");
         }
     }
 }

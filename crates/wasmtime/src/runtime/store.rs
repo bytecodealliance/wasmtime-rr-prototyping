@@ -1032,7 +1032,7 @@ impl<T> Store<T> {
     /// the Store. Replay of events is performed according to provided settings, and
     /// read from the provided reader.
     #[cfg(feature = "rr")]
-    pub fn init_replaying(
+    pub(crate) fn init_replaying(
         &mut self,
         replayer: impl ReplayReader + 'static,
         settings: ReplaySettings,

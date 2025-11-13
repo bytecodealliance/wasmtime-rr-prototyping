@@ -83,7 +83,7 @@ wasmtime_environ::foreach_builtin_component_function!(define_builtins);
 mod trampolines {
     use super::{ComponentInstance, VMComponentContext};
     #[cfg(feature = "rr-component")]
-    use crate::rr::{Replayer, component_events::*};
+    use crate::rr::{Replayer, ResultEvent, component_events::*};
     use core::ptr::NonNull;
 
     macro_rules! shims {

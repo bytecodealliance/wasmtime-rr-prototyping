@@ -1,12 +1,16 @@
-use crate::component::{self, Component, Val};
+#[cfg(feature = "rr-component")]
+use crate::component::{self, Component};
 #[cfg(feature = "rr-component")]
 use crate::rr::component_events;
-use crate::rr::{RREvent, ReplayError, Validate, component_hooks::ReplayLoweringPhase};
+use crate::rr::{
+    RREvent, ReplayError, Validate, component_hooks::ReplayLoweringPhase, core_events,
+};
 use crate::{
-    AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, ValRaw, prelude::*,
+    AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, ValRaw, ValType, prelude::*,
 };
 use alloc::collections::BTreeMap;
 use core::mem::MaybeUninit;
+use wasmtime_environ::EntityIndex;
 #[cfg(feature = "rr-component")]
 use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 
@@ -14,7 +18,7 @@ use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 #[derive(Clone)]
 pub struct ReplayEnvironment {
     engine: Engine,
-    modules: Vec<Module>,
+    modules: BTreeMap<[u8; 32], Module>,
     components: BTreeMap<[u8; 32], Component>,
     settings: ReplaySettings,
 }
@@ -24,7 +28,7 @@ impl ReplayEnvironment {
     pub fn new(engine: &Engine, settings: ReplaySettings) -> Self {
         Self {
             engine: engine.clone(),
-            modules: Vec::new(),
+            modules: BTreeMap::new(),
             components: BTreeMap::new(),
             settings,
         }
@@ -32,7 +36,7 @@ impl ReplayEnvironment {
 
     /// Add a [`Module`] to the replay environment
     pub fn add_module(&mut self, module: Module) -> &mut Self {
-        self.modules.push(module);
+        self.modules.insert(*module.checksum(), module);
         self
     }
 
@@ -58,8 +62,9 @@ pub struct ReplayInstance<'a> {
     store: Store<()>,
     component_linker: component::Linker<()>,
     module_linker: crate::Linker<()>,
-    modules: &'a Vec<Module>,
+    modules: &'a BTreeMap<[u8; 32], Module>,
     components: &'a BTreeMap<[u8; 32], Component>,
+    module_instances: BTreeMap<core_events::InstantiationEvent, crate::Instance>,
     component_instances: BTreeMap<component_events::InstantiationEvent, component::Instance>,
 }
 
@@ -73,7 +78,9 @@ impl<'a> ReplayInstance<'a> {
         let mut component_linker = component::Linker::<()>::new(&env.engine);
         let mut module_linker = crate::Linker::<()>::new(&env.engine);
         // Replays shouldn't use any imports, so stub them all out as traps
-        for module in &env.modules {
+        for module in env.modules.values() {
+            // Defining unknown imports as trap seems to not actually trigger the entrypoint?
+            // Use default values instead for now
             module_linker.define_unknown_imports_as_traps(module)?;
         }
         for component in env.components.values() {
@@ -85,6 +92,7 @@ impl<'a> ReplayInstance<'a> {
             module_linker,
             modules: &env.modules,
             components: &env.components,
+            module_instances: BTreeMap::new(),
             component_instances: BTreeMap::new(),
         })
     }
@@ -101,7 +109,7 @@ impl<'a> ReplayInstance<'a> {
         {
             // The only valid "top-level" events are:
             // * Instantiation events (component/module)
-            // * Wasm function begin events (component/module)
+            // * Wasm function begin events (`ComponentWasmFuncBegin` for components and `CoreWasmFuncEntry` for core)
             //
             // All other events are transparently dispatched under the context of these top-level events
             match rr_event? {
@@ -152,7 +160,7 @@ impl<'a> ReplayInstance<'a> {
                         // Call the function
                         //
                         // This is almost a mirror of the usage in [`component::Func::call_impl`]
-                        let mut results_storage = [Val::U64(0); MAX_FLAT_RESULTS];
+                        let mut results_storage = [component::Val::U64(0); MAX_FLAT_RESULTS];
                         let mut num_results = 0;
                         let results = &mut results_storage;
                         let _return = unsafe {
@@ -165,9 +173,8 @@ impl<'a> ReplayInstance<'a> {
                                 },
                                 |cx, results_ty, src: &[ValRaw; MAX_FLAT_RESULTS]| {
                                     // Lifting can proceed exactly as normal
-                                    let max_flat = MAX_FLAT_RESULTS;
                                     for (result, slot) in
-                                        component::Func::lift_results(cx, results_ty, src, max_flat)?.zip(results)
+                                        component::Func::lift_results(cx, results_ty, src, MAX_FLAT_RESULTS)?.zip(results)
                                     {
                                         *slot = result?;
                                         num_results += 1;
@@ -188,6 +195,60 @@ impl<'a> ReplayInstance<'a> {
                         anyhow!(
                             "Cannot parse ComponentWasmFuncBegin replay event without rr-component feature enabled"
                         );
+                    }
+                }
+                RREvent::CoreWasmInstantiation(event) => {
+                    // Find matching module from environment to instantiate
+                    let module = self
+                        .modules
+                        .get(&event.0)
+                        .ok_or(ReplayError::MissingComponentOrModule)?;
+
+                    let instance = self
+                        .module_linker
+                        .instantiate(self.store.as_context_mut(), module)?;
+
+                    // Validate the instantiation event
+                    event.validate(&core_events::InstantiationEvent(
+                        *module.checksum(),
+                        instance.id(),
+                    ))?;
+
+                    let ret = self.module_instances.insert(event, instance);
+                    // Ensures that an already-instantiated configuration is not re-instantiated
+                    assert!(ret.is_none());
+                }
+                RREvent::CoreWasmFuncEntry(event) => {
+                    // Grab the correct module instance
+                    let key = core_events::InstantiationEvent(event.module, event.origin.instance);
+                    let instance = self
+                        .module_instances
+                        .get_mut(&key)
+                        .ok_or(ReplayError::MissingComponentOrModule)?;
+
+                    let entity = EntityIndex::from(event.origin.index);
+                    let mut store = self.store.as_context_mut();
+                    let func = instance
+                        ._get_export(store.0, entity)
+                        .into_func()
+                        .ok_or(ReplayError::IncorrectCoreFuncIndex)?;
+
+                    let params_ty = func.ty(&store).params().collect::<Vec<ValType>>();
+
+                    // Obtain the argument values for function call
+                    let mut results = vec![crate::Val::I64(0); func.ty(&store).results().len()];
+                    let params = event.to_val_vec(&mut store, params_ty);
+
+                    // Call the function
+                    //
+                    // This is almost a mirror of the usage in [`crate::Func::call`] or [`crate::Func::call_async`]
+                    func.call_impl_check_args(&mut store, &params, &mut results)?;
+                    unsafe {
+                        func.call_impl_do_call(
+                            &mut store,
+                            params.as_slice(),
+                            results.as_mut_slice(),
+                        )?;
                     }
                 }
 

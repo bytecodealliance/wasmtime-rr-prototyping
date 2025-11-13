@@ -4,8 +4,6 @@ use crate::component::matching::InstanceType;
 use crate::component::resources::{HostResourceData, HostResourceIndex, HostResourceTables};
 use crate::component::{Instance, ResourceType};
 use crate::prelude::*;
-#[cfg(all(feature = "rr-component", feature = "rr-validate"))]
-use crate::rr::component_events::ResultEvent;
 #[cfg(feature = "rr-component")]
 use crate::rr::component_hooks::ReplayLoweringPhase;
 use crate::rr::{ConstMemorySliceCell, MemorySliceCell};
@@ -14,7 +12,7 @@ use crate::rr::{
     RREvent, RecordBuffer, ReplayError, Replayer, component_events::ReallocEntryEvent,
 };
 #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
-use crate::rr::{Validate, component_events::ReallocReturnEvent};
+use crate::rr::{ResultEvent, Validate, component_events::ReallocReturnEvent};
 use crate::runtime::vm::component::{
     CallContexts, ComponentInstance, InstanceFlags, ResourceTable, ResourceTables,
 };
@@ -139,7 +137,7 @@ impl Options {
 
         // Invoke the wasm malloc function using its raw and statically known
         // signature.
-        let result = unsafe { ReallocFunc::call_raw(store, realloc_ty, realloc, params)? };
+        let result = unsafe { ReallocFunc::call_raw(store, realloc_ty, realloc, params, None)? };
 
         if result % old_align != 0 {
             bail!("realloc return: result not aligned");
@@ -558,40 +556,6 @@ impl<'a, T: 'static> LowerContext<'a, T> {
             },
             host_resource_data,
         )
-    }
-
-    /// Perform a replay of only [`ReallocEntryEvent`] + [`ReallocReturnEvent`] events
-    ///
-    /// Panics if replay not enabled
-    #[cfg(feature = "rr-component")]
-    pub fn replay_realloc(&mut self) -> Result<usize> {
-        let get_event = |cx: &mut Self| cx.store.0.replay_buffer_mut().unwrap().next_event();
-        let (record_has_validation, _replay_validate) = {
-            let buf = self.store.0.replay_buffer_mut().unwrap();
-            (buf.trace_settings().add_validation, buf.settings().validate)
-        };
-
-        let ptr = match get_event(self)? {
-            RREvent::ComponentReallocEntry(e) => {
-                self.realloc_inner(e.old_addr, e.old_size, e.old_align, e.new_size)
-            }
-            _ => bail!(ReplayError::IncorrectEventVariant),
-        };
-
-        if record_has_validation {
-            match get_event(self)? {
-                RREvent::ComponentReallocReturn(e) =>
-                {
-                    #[cfg(feature = "rr-validate")]
-                    if _replay_validate {
-                        e.0.validate(&ptr)?
-                    }
-                }
-                _ => bail!(ReplayError::IncorrectEventVariant),
-            };
-        }
-
-        ptr
     }
 
     /// Perform a replay of all the type lowering-associated events for this context

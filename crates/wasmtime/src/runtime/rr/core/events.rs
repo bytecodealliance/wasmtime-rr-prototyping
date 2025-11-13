@@ -1,7 +1,8 @@
 #[cfg(any(feature = "rr-component", feature = "rr-validate"))]
 use super::ReplayError;
-use crate::ValRaw;
-use crate::prelude::*;
+use crate::rr::FlatBytes;
+use crate::{AsContextMut, Val, prelude::*};
+use crate::{ValRaw, ValType};
 use core::fmt;
 use core::mem::MaybeUninit;
 use serde::{Deserialize, Serialize};
@@ -20,38 +21,6 @@ pub trait EventError: core::error::Error + Send + Sync + 'static {
     where
         Self: Sized;
     fn get(&self) -> &String;
-}
-
-/// Types that can be serialized/deserialized into/from
-/// flat types for record and replay
-pub trait FlatBytes {
-    fn bytes_ref(&self, size: u8) -> &[u8];
-    fn from_bytes(value: &[u8]) -> Self;
-}
-
-impl FlatBytes for ValRaw {
-    #[inline]
-    fn bytes_ref(&self, size: u8) -> &[u8] {
-        &self.get_bytes()[..size as usize]
-    }
-    #[inline]
-    fn from_bytes(value: &[u8]) -> Self {
-        ValRaw::bytes(value)
-    }
-}
-
-impl FlatBytes for MaybeUninit<ValRaw> {
-    #[inline]
-    fn bytes_ref(&self, size: u8) -> &[u8] {
-        // Uninitialized data is assumed and serialized, so hence
-        // may contain some undefined values
-        let val = unsafe { self.assume_init_ref() };
-        val.bytes_ref(size)
-    }
-    #[inline]
-    fn from_bytes(value: &[u8]) -> Self {
-        MaybeUninit::new(ValRaw::bytes(value))
-    }
 }
 
 /// Representation of flat arguments for function entry/return
@@ -116,6 +85,18 @@ impl RRFuncArgVals {
             pos += flat_size as usize;
         }
     }
+
+    /// Generate a vector of [`crate::Val`] from [`RRFuncArgVals`]
+    pub fn to_val_vec(self, mut store: impl AsContextMut, val_types: Vec<ValType>) -> Vec<Val> {
+        let mut pos = 0;
+        let mut vals = Vec::new();
+        for (flat_size, val_type) in self.sizes.into_iter().zip(val_types.into_iter()) {
+            let raw = ValRaw::bytes(&self.bytes[pos..pos + flat_size as usize]);
+            vals.push(unsafe { Val::from_raw(&mut store, raw, val_type) });
+            pos += flat_size as usize;
+        }
+        vals
+    }
 }
 
 /// Trait signifying types that can be validated on replay
@@ -156,6 +137,90 @@ where
             Err(ReplayError::FailedValidation)
         }
     }
+}
+
+/// Result newtype for events that can be serialized/deserialized for record/replay.
+///
+/// Anyhow result types cannot use blanket PartialEq implementations since
+/// anyhow results are not serialized directly. They need to specifically check
+/// for divergence between recorded and replayed effects with [EventError]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultEvent<T, E: EventError>(Result<T, E>);
+
+impl<T, E> ResultEvent<T, E>
+where
+    T: Clone,
+    E: EventError,
+{
+    pub fn from_anyhow_result(ret: &Result<T>) -> Self {
+        Self(
+            ret.as_ref()
+                .map(|t| (*t).clone())
+                .map_err(|e| E::new(e.to_string())),
+        )
+    }
+    pub fn ret(self) -> Result<T, E> {
+        self.0
+    }
+}
+
+impl<T, E> Validate<Result<T>> for ResultEvent<T, E>
+where
+    T: fmt::Debug + PartialEq,
+    E: EventError,
+{
+    fn validate(&self, expect_ret: &Result<T>) -> Result<(), ReplayError> {
+        self.log();
+        // Cannot just use eq since anyhow::Error and EventError cannot be compared
+        match (self.0.as_ref(), expect_ret.as_ref()) {
+            (Ok(r), Ok(s)) => {
+                if r == s {
+                    Ok(())
+                } else {
+                    Err(ReplayError::FailedValidation)
+                }
+            }
+            // Return the recorded error
+            (Err(e), Err(f)) => Err(ReplayError::from(E::new(format!(
+                "Error on execution: {} | Error from recording: {}",
+                f,
+                e.get()
+            )))),
+            // Diverging errors.. Report as a failed validation
+            (Ok(_), Err(_)) => Err(ReplayError::FailedValidation),
+            (Err(_), Ok(_)) => Err(ReplayError::FailedValidation),
+        }
+    }
+}
+
+macro_rules! event_error_types {
+    (
+        $(
+            $( #[cfg($attr:meta)] )?
+            pub struct $ee:ident(..)
+        ),*
+    ) => (
+        $(
+            /// Return from a reallocation call (needed only for validation)
+            #[derive(Debug, Serialize, Deserialize, Clone)]
+            pub struct $ee(String);
+
+            impl core::error::Error for $ee {}
+            impl fmt::Display for $ee {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    write!(f, "{}", &self.0)
+                }
+            }
+            impl EventError for $ee {
+                fn new(t: String) -> Self where Self: Sized { Self(t) }
+                fn get(&self) -> &String { &self.0 }
+            }
+        )*
+    );
+}
+
+event_error_types! {
+    pub struct WasmFuncReturnError(..)
 }
 
 /// Events used as markers for debugging/testing in traces

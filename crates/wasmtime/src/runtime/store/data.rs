@@ -4,12 +4,13 @@ use crate::{StoreContext, StoreContextMut};
 use core::num::NonZeroU64;
 use core::ops::{Index, IndexMut};
 use core::pin::Pin;
+use serde::{Deserialize, Serialize};
 
 // This is defined here, in a private submodule, so we can explicitly reexport
 // it only as `pub(crate)`. This avoids a ton of
 // crate-private-type-in-public-interface errors that aren't really too
 // interesting to deal with.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct InstanceId(u32);
 wasmtime_environ::entity_impl!(InstanceId);
 

@@ -1,5 +1,7 @@
 use crate::linker::{Definition, DefinitionType};
 use crate::prelude::*;
+#[cfg(feature = "rr")]
+use crate::rr::core_events::InstantiationEvent;
 use crate::runtime::vm::{
     self, Imports, ModuleRuntimeInfo, VMFuncRef, VMFunctionImport, VMGlobalImport, VMMemoryImport,
     VMTableImport, VMTagImport,
@@ -185,6 +187,24 @@ impl Instance {
         Ok(owned_imports)
     }
 
+    /// Check to flag exported memories in Core wasm modules when recording is enabled
+    #[cfg(feature = "rr")]
+    fn rr_assert_unexported_memories(module: &Module) -> Result<()> {
+        // Check for exported memories when recording is enabled.
+        if module.engine().is_recording()
+            && module.exports().any(|export| {
+                if let crate::ExternType::Memory(_) = export.ty() {
+                    true
+                } else {
+                    false
+                }
+            })
+        {
+            bail!("Cannot support recording for core wasm modules when a memory is exported");
+        }
+        Ok(())
+    }
+
     /// Internal function to create an instance and run the start function.
     ///
     /// This function's unsafety is the same as `Instance::new_raw`.
@@ -200,7 +220,16 @@ impl Instance {
 
         // SAFETY: the safety contract of `new_started_impl` is the same as this
         // function.
-        unsafe { Self::new_started_impl(store, module, imports) }
+        let result = unsafe { Self::new_started_impl(store, module, imports) }?;
+        #[cfg(feature = "rr")]
+        {
+            Self::rr_assert_unexported_memories(module)?;
+            // Record the instantiation event
+            store
+                .0
+                .record_event(|| InstantiationEvent(*module.checksum(), result.id()))?;
+        }
+        Ok(result)
     }
 
     /// Internal function to create an instance and run the start function.
@@ -242,7 +271,16 @@ impl Instance {
             .on_fiber(|store| {
                 // SAFETY: the unsafe contract of `new_started_impl` is the same
                 // as this function.
-                unsafe { Self::new_started_impl(store, module, imports) }
+                let result = unsafe { Self::new_started_impl(store, module, imports) }?;
+                #[cfg(feature = "rr")]
+                {
+                    Self::rr_assert_unexported_memories(module)?;
+                    // Record the instantiation event
+                    store
+                        .0
+                        .record_event(|| InstantiationEvent(*module.checksum(), result.id()))?;
+                }
+                Ok(result)
             })
             .await?
     }
@@ -445,7 +483,7 @@ impl Instance {
         Some(self._get_export(store, export.entity))
     }
 
-    fn _get_export(&self, store: &mut StoreOpaque, entity: EntityIndex) -> Extern {
+    pub(crate) fn _get_export(&self, store: &mut StoreOpaque, entity: EntityIndex) -> Extern {
         let id = store.id();
         // SAFETY: the store `id` owns this instance and all exports contained
         // within.
@@ -930,22 +968,6 @@ fn pre_instantiate_raw(
             },
         };
         imports.push(&item, store);
-    }
-
-    #[cfg(feature = "rr")]
-    if module.engine().is_recording()
-        && module.exports().any(|export| {
-            use crate::ExternType;
-            if let ExternType::Memory(_) = export.ty() {
-                true
-            } else {
-                false
-            }
-        })
-    {
-        bail!(
-            "Cannot support recording for core wasm modules when a memory is exported; consider using components"
-        );
     }
 
     Ok(imports)

@@ -30,7 +30,13 @@ typedef struct wasmtime_func {
   /// this field is otherwise never zero.
   uint64_t store_id;
   /// Private field for Wasmtime, undefined if `store_id` is zero.
-  void *__private;
+  void *__private1;
+  /// Private field for Wasmtime
+  uint32_t *__private2;
+  /// Private field for Wasmtime
+  uint32_t *__private3;
+  /// Private field for Wasmtime
+  uint32_t *__private4;
 } wasmtime_func_t;
 
 /// \brief Representation of a table in Wasmtime.

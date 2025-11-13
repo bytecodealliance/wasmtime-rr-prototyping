@@ -2,9 +2,10 @@ use crate::ValRaw;
 #[cfg(feature = "component-model")]
 use crate::component::func::LowerContext;
 #[cfg(feature = "rr-component")]
+use crate::rr::ResultEvent;
+#[cfg(feature = "rr-component")]
 use crate::rr::component_events::{
-    HostFuncReturnEvent, LowerFlatReturnEvent, LowerMemoryReturnEvent, ResultEvent,
-    WasmFuncEntryEvent,
+    HostFuncReturnEvent, LowerFlatReturnEvent, LowerMemoryReturnEvent, WasmFuncEntryEvent,
 };
 #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
 use crate::rr::{RRFuncArgVals, component_events::WasmFuncReturnEvent};

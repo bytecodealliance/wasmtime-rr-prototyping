@@ -111,91 +111,10 @@ pub struct MemorySliceWriteEvent {
     pub bytes: Vec<u8>,
 }
 
-/// Result newtype for events that can be serialized/deserialized for record/replay.
-///
-/// Anyhow result types cannot use blanket PartialEq implementations since
-/// anyhow results are not serialized directly. They need to specifically check
-/// for divergence between recorded and replayed effects with [EventError]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResultEvent<T, E: EventError>(Result<T, E>);
-
-impl<T, E> ResultEvent<T, E>
-where
-    T: Clone,
-    E: EventError,
-{
-    pub fn from_anyhow_result(ret: &Result<T>) -> Self {
-        Self(
-            ret.as_ref()
-                .map(|t| (*t).clone())
-                .map_err(|e| E::new(e.to_string())),
-        )
-    }
-    pub fn ret(self) -> Result<T, E> {
-        self.0
-    }
-}
-
-impl<T, E> Validate<Result<T>> for ResultEvent<T, E>
-where
-    T: fmt::Debug + PartialEq,
-    E: EventError,
-{
-    fn validate(&self, expect_ret: &Result<T>) -> Result<(), ReplayError> {
-        self.log();
-        // Cannot just use eq since anyhow::Error and EventError cannot be compared
-        match (self.0.as_ref(), expect_ret.as_ref()) {
-            (Ok(r), Ok(s)) => {
-                if r == s {
-                    Ok(())
-                } else {
-                    Err(ReplayError::FailedValidation)
-                }
-            }
-            // Return the recorded error
-            (Err(e), Err(f)) => Err(ReplayError::from(E::new(format!(
-                "Error on execution: {} | Error from recording: {}",
-                f,
-                e.get()
-            )))),
-            // Diverging errors.. Report as a failed validation
-            (Ok(_), Err(_)) => Err(ReplayError::FailedValidation),
-            (Err(_), Ok(_)) => Err(ReplayError::FailedValidation),
-        }
-    }
-}
-
-macro_rules! event_error_types {
-    (
-        $(
-            $( #[cfg($attr:meta)] )?
-            pub struct $ee:ident(..)
-        ),*
-    ) => (
-        $(
-            /// Return from a reallocation call (needed only for validation)
-            #[derive(Debug, Serialize, Deserialize, Clone)]
-            pub struct $ee(String);
-
-            impl core::error::Error for $ee {}
-            impl fmt::Display for $ee {
-                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    write!(f, "{}", &self.0)
-                }
-            }
-            impl EventError for $ee {
-                fn new(t: String) -> Self where Self: Sized { Self(t) }
-                fn get(&self) -> &String { &self.0 }
-            }
-        )*
-    );
-}
-
 event_error_types! {
     pub struct ReallocError(..),
     pub struct LowerFlatError(..),
     pub struct LowerMemoryError(..),
-    pub struct WasmFuncReturnError(..),
     pub struct BuiltinError(..)
 }
 
@@ -209,20 +128,6 @@ pub struct LowerFlatReturnEvent(pub ResultEvent<(), LowerFlatError>);
 /// Return from type lowering to destination in memory
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LowerMemoryReturnEvent(pub ResultEvent<(), LowerMemoryError>);
-
-/// A return event from a Wasm component function to Host
-///
-/// Matches 1:1 with [`WasmFuncEntryEvent`].
-///
-/// Note: Could potential merge with [`HostFuncReturnEvent`] as [`HostToWasmEvent`]?
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WasmFuncReturnEvent(pub ResultEvent<RRFuncArgVals, WasmFuncReturnError>);
-
-impl Validate<&Result<RRFuncArgVals>> for WasmFuncReturnEvent {
-    fn validate(&self, expect: &&Result<RRFuncArgVals>) -> Result<(), ReplayError> {
-        self.0.validate(*expect)
-    }
-}
 
 // Macro to generate RR events from the builtin descriptions
 macro_rules! builtin_events {

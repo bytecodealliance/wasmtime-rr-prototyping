@@ -5,7 +5,7 @@ use crate::runtime::vm::{
     InterpreterRef, SendSyncPtr, StoreBox, VMArrayCallHostFuncContext, VMCommonStackInformation,
     VMContext, VMFuncRef, VMFunctionImport, VMOpaqueContext, VMStoreContext,
 };
-use crate::store::{AutoAssertNoGc, StoreId, StoreOpaque};
+use crate::store::{AutoAssertNoGc, InstanceId, StoreId, StoreOpaque};
 use crate::type_registry::RegisteredType;
 use crate::{
     AsContext, AsContextMut, CallHook, Engine, Extern, FuncType, Instance, ModuleExport, Ref,
@@ -17,7 +17,8 @@ use core::ffi::c_void;
 use core::future::Future;
 use core::mem::{self, MaybeUninit};
 use core::ptr::NonNull;
-use wasmtime_environ::VMSharedTypeIndex;
+use serde::{Deserialize, Serialize};
+use wasmtime_environ::{FuncIndex, VMSharedTypeIndex};
 
 /// A reference to the abstract `nofunc` heap value.
 ///
@@ -100,6 +101,15 @@ impl NoFunc {
     pub fn null_val() -> Val {
         Val::FuncRef(None)
     }
+}
+
+/// Metadata for the origin of a WebAssembly [`Func`]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct WasmFuncOrigin {
+    /// The instance from which the embedded function belongs to.
+    pub instance: InstanceId,
+    /// The function index within the module.
+    pub index: FuncIndex,
 }
 
 /// A WebAssembly function which can be called.
@@ -278,13 +288,20 @@ pub struct Func {
     /// an ambiently provided `StoreOpaque` or similar. Use the
     /// `self.func_ref()` method instead of this field to perform this check.
     unsafe_func_ref: SendSyncPtr<VMFuncRef>,
+
+    /// Optional metadata about the origin of this function.
+    ///
+    /// This field is populated when a [`Func`] is generated from a known instance
+    /// (i.e. exported Wasm functions), and is usually `None` for internal
+    /// Wasm functions and host functions.
+    origin: Option<WasmFuncOrigin>,
 }
 
 // Double-check that the C representation in `extern.h` matches our in-Rust
 // representation here in terms of size/alignment/etc.
 const _: () = {
     #[repr(C)]
-    struct C(u64, *mut u8);
+    struct C(u64, *mut u8, (u32, u32, u32));
     assert!(core::mem::size_of::<C>() == core::mem::size_of::<Func>());
     assert!(core::mem::align_of::<C>() == core::mem::align_of::<Func>());
     assert!(core::mem::offset_of!(Func, store) == 0);
@@ -549,6 +566,7 @@ impl Func {
         Func {
             store,
             unsafe_func_ref: func_ref.into(),
+            origin: None,
         }
     }
 
@@ -1009,9 +1027,17 @@ impl Func {
         let func_ref = self.vm_func_ref(store.0);
         let params_and_returns = NonNull::new(params_and_returns).unwrap_or(NonNull::from(&mut []));
 
-        // SAFETY: the safety of this function call is the same as the contract
-        // of this function.
-        unsafe { Self::call_unchecked_raw(&mut store, func_ref, params_and_returns) }
+        rr::core_hooks::record_and_replay_validate_wasm_func(
+            |mut store| {
+                // SAFETY: the safety of this function call is the same as the contract
+                // of this function.
+                unsafe { Self::call_unchecked_raw(&mut store, func_ref, params_and_returns) }
+            },
+            unsafe { params_and_returns.as_ref() },
+            &self.ty(&store),
+            self.origin.clone(),
+            &mut store,
+        )
     }
 
     pub(crate) unsafe fn call_unchecked_raw<T>(
@@ -1124,7 +1150,7 @@ impl Func {
     /// of arguments as well as making sure everything is from the same `Store`.
     ///
     /// This must be called just before `call_impl_do_call`.
-    fn call_impl_check_args<T>(
+    pub(crate) fn call_impl_check_args<T>(
         &self,
         store: &mut StoreContextMut<'_, T>,
         params: &[Val],
@@ -1164,7 +1190,7 @@ impl Func {
     /// You must have type checked the arguments by calling
     /// `call_impl_check_args` immediately before calling this function. It is
     /// only safe to call this function if that one did not return an error.
-    unsafe fn call_impl_do_call<T>(
+    pub(crate) unsafe fn call_impl_do_call<T>(
         &self,
         store: &mut StoreContextMut<'_, T>,
         params: &[Val],
@@ -1260,22 +1286,51 @@ impl Func {
         debug_assert!(val_vec.is_empty());
         let nparams = ty.params().len();
         val_vec.reserve(nparams + ty.results().len());
-        for (i, ty) in ty.params().enumerate() {
-            val_vec.push(unsafe { Val::from_raw(&mut caller.store, values_vec[i], ty) })
-        }
 
-        val_vec.extend((0..ty.results().len()).map(|_| Val::null_func_ref()));
-        let (params, results) = val_vec.split_at_mut(nparams);
-        func(caller.sub_caller(), params, results)?;
+        // Recording host function entry
+        let flat_params = ty
+            .params()
+            .into_iter()
+            .map(|x| x.to_wasm_type().byte_size())
+            .collect::<Vec<_>>();
 
-        // Unlike our arguments we need to dynamically check that the return
-        // values produced are correct. There could be a bug in `func` that
-        // produces the wrong number, wrong types, or wrong stores of
-        // values, and we need to catch that here.
-        for (i, (ret, ty)) in results.iter().zip(ty.results()).enumerate() {
-            ret.ensure_matches_ty(caller.store.0, &ty)
-                .context("function attempted to return an incompatible value")?;
-            values_vec[i] = ret.to_raw(&mut caller.store)?;
+        rr::core_hooks::record_replay_host_func_entry(
+            values_vec,
+            &flat_params,
+            &mut caller.store.0,
+        )?;
+
+        if !caller.store.0.replay_enabled() {
+            for (i, ty) in ty.params().enumerate() {
+                val_vec.push(unsafe { Val::from_raw(&mut caller.store, values_vec[i], ty) })
+            }
+
+            val_vec.extend((0..ty.results().len()).map(|_| Val::null_func_ref()));
+            let (params, results) = val_vec.split_at_mut(nparams);
+            func(caller.sub_caller(), params, results)?;
+
+            // Unlike our arguments we need to dynamically check that the return
+            // values produced are correct. There could be a bug in `func` that
+            // produces the wrong number, wrong types, or wrong stores of
+            // values, and we need to catch that here.
+            for (i, (ret, ty)) in results.iter().zip(ty.results()).enumerate() {
+                ret.ensure_matches_ty(caller.store.0, &ty)
+                    .context("function attempted to return an incompatible value")?;
+                values_vec[i] = ret.to_raw(&mut caller.store)?;
+            }
+
+            let flat_results = ty
+                .results()
+                .into_iter()
+                .map(|x| x.to_wasm_type().byte_size())
+                .collect::<Vec<_>>();
+            rr::core_hooks::record_host_func_return(
+                values_vec,
+                &flat_results,
+                &mut caller.store.0,
+            )?;
+        } else {
+            rr::core_hooks::replay_host_func_return(values_vec, &mut caller.store.0)?;
         }
 
         // Restore our `val_vec` back into the store so it's usable for the next
@@ -1480,6 +1535,16 @@ impl Func {
     )]
     pub(crate) fn hash_key(&self, store: &mut StoreOpaque) -> impl core::hash::Hash + Eq + use<> {
         self.vm_func_ref(store).as_ptr().addr()
+    }
+
+    /// Set the origin of this function.
+    pub(crate) fn set_origin(&mut self, origin: WasmFuncOrigin) {
+        self.origin = Some(origin);
+    }
+
+    // Get the origin of this function
+    pub(crate) fn origin(&self) -> Option<WasmFuncOrigin> {
+        self.origin
     }
 }
 
@@ -2365,7 +2430,6 @@ impl HostContext {
             };
             let func = &state.func;
 
-            let func_type_index = state._ty.index();
             let (flat_size_params, flat_size_results) = {
                 let type_index = state._ty.index();
                 let wasm_func_subtype = caller.engine().signatures().borrow(type_index).unwrap();
@@ -2390,7 +2454,6 @@ impl HostContext {
             rr::core_hooks::record_replay_host_func_entry(
                 unsafe { &args.as_ref()[..num_params] },
                 flat_size_params.as_slice(),
-                &func_type_index,
                 caller.store.0,
             )?;
 
@@ -2436,14 +2499,12 @@ impl HostContext {
                 rr::core_hooks::record_host_func_return(
                     unsafe { &args.as_ref()[..num_results] },
                     flat_size_results.as_slice(),
-                    &func_type_index,
                     caller.store.0,
                 )?;
             } else {
                 // Replay the return values
                 rr::core_hooks::replay_host_func_return(
                     unsafe { &mut args.as_mut()[..num_results] },
-                    &func_type_index,
                     caller.store.0,
                 )?;
             }

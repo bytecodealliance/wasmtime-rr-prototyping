@@ -7,7 +7,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use wasmtime_environ::component::FlatTypesStorage;
 
-/// A return event after a host call for a core OR component Wasm
+/// A return event after a host call to Wasm (core or component)
 ///
 /// Matches with either [`component_events::HostFuncEntryEvent`] or
 /// [`core_events::HostFuncEntryEvent`]
@@ -18,7 +18,10 @@ pub struct HostFuncReturnEvent {
 }
 impl HostFuncReturnEvent {
     // Record
-    pub fn new_from_u8(args: &[MaybeUninit<ValRaw>], flat: &[u8]) -> Self {
+    pub fn new_from_u8<T>(args: &[T], flat: &[u8]) -> Self
+    where
+        T: FlatBytes,
+    {
         Self {
             args: RRFuncArgVals::from_raw_slice(args, flat.iter().copied()),
         }
@@ -33,7 +36,23 @@ impl HostFuncReturnEvent {
 
     // Replay
     /// Consume the caller event and encode it back into the slice
-    pub fn move_into_slice(self, args: &mut [MaybeUninit<ValRaw>]) {
+    pub fn move_into_slice<T>(self, args: &mut [T])
+    where
+        T: FlatBytes,
+    {
         self.args.into_raw_slice(args);
+    }
+}
+
+/// A return event from a Wasm (core or component) function to host
+///
+/// Matches with either [`component_events::WasmFuncEntryEvent`] or
+/// [`core_events::WasmFuncEntryEvent`]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmFuncReturnEvent(pub ResultEvent<RRFuncArgVals, WasmFuncReturnError>);
+
+impl Validate<&Result<RRFuncArgVals>> for WasmFuncReturnEvent {
+    fn validate(&self, expect: &&Result<RRFuncArgVals>) -> Result<(), ReplayError> {
+        self.0.validate(*expect)
     }
 }
