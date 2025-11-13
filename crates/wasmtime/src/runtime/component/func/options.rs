@@ -605,7 +605,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                         return Err(e.into());
                     }
                     if let Some(storage) = result_storage.as_deref_mut() {
-                        e.move_into_slice(storage);
+                        e.args.into_raw_slice(storage);
                     }
                     complete = true;
                 }
@@ -619,7 +619,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                         return Err(e.into());
                     }
                     if let Some(storage) = result_storage.as_deref_mut() {
-                        e.move_into_slice(storage);
+                        e.args.into_raw_slice(storage);
                     }
                     complete = true;
                 }

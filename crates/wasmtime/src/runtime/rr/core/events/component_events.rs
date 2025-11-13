@@ -7,7 +7,7 @@ use crate::vm::component::libcalls::ResourceDropRet;
 pub use common_events::*;
 use wasmtime_environ::{
     self,
-    component::{ExportIndex, FlatTypesStorage, InterfaceType, TypeFuncIndex},
+    component::{ExportIndex, InterfaceType},
 };
 
 /// Beginning marker for a Wasm component function call from host
@@ -23,56 +23,25 @@ pub struct WasmFuncBeginEvent {
 
 /// A [`Component`] instantiatation event
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
-pub struct InstantiationEvent(
+pub struct InstantiationEvent {
     /// Checksum of the bytecode used to instantiate the component
-    pub [u8; 32],
-    pub ComponentInstanceId,
-);
+    pub component: [u8; 32],
+    /// Instance ID for the instantiated component
+    pub instance: ComponentInstanceId,
+}
 
 /// A call event from Host into a Wasm component function
-///
-/// Note: Could potential merge with [`HostFuncReturnEvent`] as [`WasmToHostEvent`]?
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmFuncEntryEvent {
     /// Raw values passed across call boundary
-    args: RRFuncArgVals,
-}
-impl WasmFuncEntryEvent {
-    // Record
-    pub fn new(args: &[ValRaw], flat: FlatTypesStorage) -> Self {
-        Self {
-            args: RRFuncArgVals::from_raw_slice(args, flat.iter32()),
-        }
-    }
-
-    // Replay
-    /// Consume the caller event and encode it back into the slice
-    pub fn move_into_slice(self, args: &mut [MaybeUninit<ValRaw>]) {
-        self.args.into_raw_slice(args);
-    }
+    pub args: RRFuncArgVals,
 }
 
 /// A call event from a Wasm component into the host
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HostFuncEntryEvent {
     /// Raw values passed across the call entry boundary
-    args: RRFuncArgVals,
-
-    /// Function index (required to support replay validation).
-    ///
-    /// Note: This relies on the invariant that [InterfaceType] will always be
-    /// deterministic. Currently, the type indices into various [ComponentTypes]
-    /// maintain this, allowing for quick type-checking.
-    ty: TypeFuncIndex,
-}
-impl HostFuncEntryEvent {
-    // Record
-    pub fn new(args: &[MaybeUninit<ValRaw>], flat: FlatTypesStorage, ty: TypeFuncIndex) -> Self {
-        Self {
-            args: RRFuncArgVals::from_raw_slice(args, flat.iter32()),
-            ty: ty,
-        }
-    }
+    pub args: RRFuncArgVals,
 }
 
 /// A reallocation call event in the Component Model canonical ABI

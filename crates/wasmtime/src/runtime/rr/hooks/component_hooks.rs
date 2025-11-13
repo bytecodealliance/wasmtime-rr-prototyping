@@ -45,9 +45,9 @@ where
             &InterfaceType::Tuple(types[type_idx].params),
             MAX_FLAT_PARAMS,
         );
-        store
-            .0
-            .record_event(|| WasmFuncEntryEvent::new(args, flat_params))?;
+        store.0.record_event(|| WasmFuncEntryEvent {
+            args: RRFuncArgVals::from_flat_storage(args, flat_params),
+        })?;
     }
     let result = wasm_call(store);
     #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
@@ -88,7 +88,9 @@ pub fn record_and_replay_validate_host_func_entry(
                 &InterfaceType::Tuple(types[*type_idx].params),
                 MAX_FLAT_PARAMS,
             );
-            HostFuncEntryEvent::new(args, flat_params, type_idx.clone())
+            HostFuncEntryEvent {
+                args: RRFuncArgVals::from_flat_storage(args, flat_params),
+            }
         };
         store.record_event_validation(|| event())?;
         store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| event())?;
@@ -108,7 +110,9 @@ pub fn record_host_func_return(
     #[cfg(feature = "rr-component")]
     store.record_event(|| {
         let flat_results = types.flat_types_storage(&ty, MAX_FLAT_RESULTS);
-        HostFuncReturnEvent::new_from_flat_storage(args, flat_results)
+        HostFuncReturnEvent {
+            args: RRFuncArgVals::from_flat_storage(args, flat_results),
+        }
     })?;
     let _ = (args, types, ty, store);
     Ok(())

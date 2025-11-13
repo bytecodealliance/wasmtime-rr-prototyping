@@ -5,7 +5,6 @@
 
 use super::*;
 use serde::{Deserialize, Serialize};
-use wasmtime_environ::component::FlatTypesStorage;
 
 /// A return event after a host call to Wasm (core or component)
 ///
@@ -14,34 +13,7 @@ use wasmtime_environ::component::FlatTypesStorage;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostFuncReturnEvent {
     /// Raw values passed across the call/return boundary
-    args: RRFuncArgVals,
-}
-impl HostFuncReturnEvent {
-    // Record
-    pub fn new_from_u8<T>(args: &[T], flat: &[u8]) -> Self
-    where
-        T: FlatBytes,
-    {
-        Self {
-            args: RRFuncArgVals::from_raw_slice(args, flat.iter().copied()),
-        }
-    }
-
-    #[cfg(feature = "rr-component")]
-    pub fn new_from_flat_storage(args: &[MaybeUninit<ValRaw>], flat: FlatTypesStorage) -> Self {
-        Self {
-            args: RRFuncArgVals::from_raw_slice(args, flat.iter32()),
-        }
-    }
-
-    // Replay
-    /// Consume the caller event and encode it back into the slice
-    pub fn move_into_slice<T>(self, args: &mut [T])
-    where
-        T: FlatBytes,
-    {
-        self.args.into_raw_slice(args);
-    }
+    pub args: RRFuncArgVals,
 }
 
 /// A return event from a Wasm (core or component) function to host

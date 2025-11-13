@@ -225,9 +225,10 @@ impl Instance {
         {
             Self::rr_assert_unexported_memories(module)?;
             // Record the instantiation event
-            store
-                .0
-                .record_event(|| InstantiationEvent(*module.checksum(), result.id()))?;
+            store.0.record_event(|| InstantiationEvent {
+                module: *module.checksum(),
+                instance: result.id(),
+            })?;
         }
         Ok(result)
     }
@@ -276,9 +277,10 @@ impl Instance {
                 {
                     Self::rr_assert_unexported_memories(module)?;
                     // Record the instantiation event
-                    store
-                        .0
-                        .record_event(|| InstantiationEvent(*module.checksum(), result.id()))?;
+                    store.0.record_event(|| InstantiationEvent {
+                        module: *module.checksum(),
+                        instance: result.id(),
+                    })?;
                 }
                 Ok(result)
             })

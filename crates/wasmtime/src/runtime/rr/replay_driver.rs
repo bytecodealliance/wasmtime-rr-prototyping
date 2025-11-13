@@ -132,17 +132,17 @@ impl<'a> ReplayInstance<'a> {
                     // Find matching component from environment to instantiate
                     let component = self
                         .components
-                        .get(&event.0)
-                        .ok_or(ReplayError::MissingComponent(event.0))?;
+                        .get(&event.component)
+                        .ok_or(ReplayError::MissingComponent(event.component))?;
 
                     let instance = self
                         .component_linker
                         .instantiate(self.store.as_context_mut(), component)?;
                     // Validate the instantiation event
-                    event.validate(&component_events::InstantiationEvent(
-                        *component.checksum(),
-                        instance.id().instance(),
-                    ))?;
+                    event.validate(&component_events::InstantiationEvent {
+                        component: *component.checksum(),
+                        instance: instance.id().instance(),
+                    })?;
 
                     let ret = self.component_instances.insert(event, instance);
                     // Ensures that an already-instantiated configuration is not re-instantiated
@@ -159,11 +159,14 @@ impl<'a> ReplayInstance<'a> {
                 #[cfg(feature = "rr-component")]
                 {
                     // Grab the correct component instance
-                    let key = component_events::InstantiationEvent(event.component, event.instance);
+                    let key = component_events::InstantiationEvent {
+                        component: event.component,
+                        instance: event.instance,
+                    };
                     let instance = self
                         .component_instances
                         .get_mut(&key)
-                        .ok_or(ReplayError::MissingComponentInstance(key.1.as_u32()))?;
+                        .ok_or(ReplayError::MissingComponentInstance(key.instance.as_u32()))?;
 
                     // Replay lowering steps and obtain raw value arguments to raw function call
                     let func = component::Func::from_lifted_func(*instance, event.func_idx);
@@ -213,18 +216,18 @@ impl<'a> ReplayInstance<'a> {
                 // Find matching module from environment to instantiate
                 let module = self
                     .modules
-                    .get(&event.0)
-                    .ok_or(ReplayError::MissingModule(event.0))?;
+                    .get(&event.module)
+                    .ok_or(ReplayError::MissingModule(event.module))?;
 
                 let instance = self
                     .module_linker
                     .instantiate(self.store.as_context_mut(), module)?;
 
                 // Validate the instantiation event
-                event.validate(&core_events::InstantiationEvent(
-                    *module.checksum(),
-                    instance.id(),
-                ))?;
+                event.validate(&core_events::InstantiationEvent {
+                    module: *module.checksum(),
+                    instance: instance.id(),
+                })?;
 
                 let ret = self.module_instances.insert(event, instance);
                 // Ensures that an already-instantiated configuration is not re-instantiated
@@ -232,11 +235,14 @@ impl<'a> ReplayInstance<'a> {
             }
             RREvent::CoreWasmFuncEntry(event) => {
                 // Grab the correct module instance
-                let key = core_events::InstantiationEvent(event.module, event.origin.instance);
+                let key = core_events::InstantiationEvent {
+                    module: event.module,
+                    instance: event.origin.instance,
+                };
                 let instance = self
                     .module_instances
                     .get_mut(&key)
-                    .ok_or(ReplayError::MissingModuleInstance(key.1.as_u32()))?;
+                    .ok_or(ReplayError::MissingModuleInstance(key.instance.as_u32()))?;
 
                 let entity = EntityIndex::from(event.origin.index);
                 let mut store = self.store.as_context_mut();
@@ -249,7 +255,7 @@ impl<'a> ReplayInstance<'a> {
 
                 // Obtain the argument values for function call
                 let mut results = vec![crate::Val::I64(0); func.ty(&store).results().len()];
-                let params = event.to_val_vec(&mut store, params_ty);
+                let params = event.args.to_val_vec(&mut store, params_ty);
 
                 // Call the function
                 //

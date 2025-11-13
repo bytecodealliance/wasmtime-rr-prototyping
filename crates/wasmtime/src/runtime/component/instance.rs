@@ -1031,8 +1031,9 @@ impl<T: 'static> InstancePre<T> {
         #[cfg(feature = "rr-component")]
         {
             use crate::rr::component_events::InstantiationEvent;
-            store.0.record_event(|| {
-                InstantiationEvent(*self.component.checksum(), instantiator.id())
+            store.0.record_event(|| InstantiationEvent {
+                component: *self.component.checksum(),
+                instance: instantiator.id(),
             })?;
         }
         instantiator.run(&mut store).map_err(|e| {

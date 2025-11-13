@@ -5,6 +5,8 @@ use crate::rr::core_events::{HostFuncReturnEvent, WasmFuncEntryEvent};
 use crate::rr::{
     RRFuncArgVals, ResultEvent, core_events::HostFuncEntryEvent, core_events::WasmFuncReturnEvent,
 };
+#[cfg(feature = "rr")]
+use crate::store::StoreInstanceId;
 use crate::store::StoreOpaque;
 use crate::{FuncType, StoreContextMut, ValRaw, WasmFuncOrigin, prelude::*};
 
@@ -26,19 +28,21 @@ where
     #[cfg(feature = "rr")]
     {
         if let Some(origin) = origin {
-            use crate::store::StoreInstanceId;
-
-            let flat = ty
-                .params()
-                .map(|t| t.to_wasm_type().byte_size())
-                .collect::<Vec<u8>>();
             let checksum = *store
                 .0
                 .module_for_instance(StoreInstanceId::new(store.0.id(), origin.instance))
                 .unwrap()
                 .checksum();
             store.0.record_event(|| {
-                WasmFuncEntryEvent::new(checksum, origin, args, flat.as_slice())
+                let flat = ty
+                    .params()
+                    .map(|t| t.to_wasm_type().byte_size())
+                    .collect::<Vec<u8>>();
+                WasmFuncEntryEvent {
+                    module: checksum,
+                    origin,
+                    args: RRFuncArgVals::from_flat_u8(args, &flat),
+                }
             })?;
         }
     }
@@ -69,7 +73,7 @@ where
 
 /// Record and replay hook operation for host function entry events
 #[inline]
-pub fn record_replay_host_func_entry<T>(
+pub fn record_and_replay_validate_host_func_entry<T>(
     args: &[T],
     flat: &[u8],
     store: &mut StoreOpaque,
@@ -80,9 +84,11 @@ where
     #[cfg(all(feature = "rr", feature = "rr-validate"))]
     {
         // Record/replay the raw parameter args
-        store.record_event_validation(|| HostFuncEntryEvent::new(args, flat))?;
-        store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| {
-            HostFuncEntryEvent::new(args, flat)
+        store.record_event_validation(|| HostFuncEntryEvent {
+            args: RRFuncArgVals::from_flat_u8(args, flat),
+        })?;
+        store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| HostFuncEntryEvent {
+            args: RRFuncArgVals::from_flat_u8(args, flat),
         })?;
     }
     let _ = (args, flat, store);
@@ -97,7 +103,9 @@ where
 {
     // Record the return values
     #[cfg(feature = "rr")]
-    store.record_event(|| HostFuncReturnEvent::new_from_u8(&args, flat))?;
+    store.record_event(|| HostFuncReturnEvent {
+        args: RRFuncArgVals::from_flat_u8(args, flat),
+    })?;
     let _ = (args, flat, store);
     Ok(())
 }
@@ -110,7 +118,7 @@ where
 {
     #[cfg(feature = "rr")]
     store.next_replay_event_and(|event: HostFuncReturnEvent| {
-        event.move_into_slice(args);
+        event.args.into_raw_slice(args);
         Ok(())
     })?;
     let _ = (args, store);

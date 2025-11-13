@@ -4,8 +4,9 @@ use crate::rr::FlatBytes;
 use crate::{AsContextMut, Val, prelude::*};
 use crate::{ValRaw, ValType};
 use core::fmt;
-use core::mem::MaybeUninit;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "rr-component")]
+use wasmtime_environ::component::FlatTypesStorage;
 
 /// A serde compatible representation of errors produced during execution
 /// of certain events
@@ -60,7 +61,7 @@ impl fmt::Debug for RRFuncArgVals {
 }
 
 impl RRFuncArgVals {
-    /// Construct [`RRFuncArgVals`] from raw value buffer and flat sizes
+    /// Construct [`RRFuncArgVals`] from raw value buffer and a flat size iterator
     pub fn from_raw_slice<T>(args: &[T], flat: impl Iterator<Item = u8>) -> RRFuncArgVals
     where
         T: FlatBytes,
@@ -72,6 +73,23 @@ impl RRFuncArgVals {
             sizes.push(flat_size);
         }
         RRFuncArgVals { bytes, sizes }
+    }
+
+    /// Construct [`RRFuncArgVals`] from raw value buffer and a [`FlatTypesStorage`]
+    #[cfg(feature = "rr-component")]
+    pub fn from_flat_storage<T>(args: &[T], flat: FlatTypesStorage) -> RRFuncArgVals
+    where
+        T: FlatBytes,
+    {
+        RRFuncArgVals::from_raw_slice(args, flat.iter32())
+    }
+
+    /// Construct [`RRFuncArgVals`] from raw value buffer and a `[&u8]` slice
+    pub fn from_flat_u8<T>(args: &[T], flat: &[u8]) -> RRFuncArgVals
+    where
+        T: FlatBytes,
+    {
+        RRFuncArgVals::from_raw_slice(args, flat.iter().copied())
     }
 
     /// Encode [`RRFuncArgVals`] back into raw value buffer
