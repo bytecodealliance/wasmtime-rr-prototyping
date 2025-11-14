@@ -56,7 +56,7 @@ where
             &InterfaceType::Tuple(types[type_idx].results),
             MAX_FLAT_RESULTS,
         );
-        let result = result.map(|_| RRFuncArgVals::from_raw_slice(args, flat_results.iter32()));
+        let result = result.map(|_| RRFuncArgVals::from_flat_iter(args, flat_results.iter32()));
         store.0.record_event_validation(|| {
             WasmFuncReturnEvent(ResultEvent::from_anyhow_result(&result))
         })?;

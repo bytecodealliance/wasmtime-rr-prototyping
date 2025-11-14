@@ -34,14 +34,11 @@ where
                 .unwrap()
                 .checksum();
             store.0.record_event(|| {
-                let flat = ty
-                    .params()
-                    .map(|t| t.to_wasm_type().byte_size())
-                    .collect::<Vec<u8>>();
+                let flat = ty.params().map(|t| t.to_wasm_type().byte_size());
                 WasmFuncEntryEvent {
                     module: checksum,
                     origin,
-                    args: RRFuncArgVals::from_flat_u8(args, &flat),
+                    args: RRFuncArgVals::from_flat_iter(args, flat),
                 }
             })?;
         }
@@ -50,11 +47,8 @@ where
     #[cfg(all(feature = "rr", feature = "rr-validate"))]
     {
         if origin.is_some() {
-            let flat = ty
-                .results()
-                .map(|t| t.to_wasm_type().byte_size())
-                .collect::<Vec<u8>>();
-            let result = result.map(|_| RRFuncArgVals::from_raw_slice(args, flat.iter().copied()));
+            let flat = ty.results().map(|t| t.to_wasm_type().byte_size());
+            let result = result.map(|_| RRFuncArgVals::from_flat_iter(args, flat));
             store.0.record_event_validation(|| {
                 WasmFuncReturnEvent(ResultEvent::from_anyhow_result(&result))
             })?;
@@ -75,38 +69,47 @@ where
 #[inline]
 pub fn record_and_replay_validate_host_func_entry<T>(
     args: &[T],
-    flat: &[u8],
+    flat: impl Iterator<Item = u8>,
     store: &mut StoreOpaque,
 ) -> Result<()>
 where
     T: FlatBytes,
 {
+    let _ = (args, &flat, &store);
     #[cfg(all(feature = "rr", feature = "rr-validate"))]
     {
         // Record/replay the raw parameter args
-        store.record_event_validation(|| HostFuncEntryEvent {
-            args: RRFuncArgVals::from_flat_u8(args, flat),
-        })?;
-        store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| HostFuncEntryEvent {
-            args: RRFuncArgVals::from_flat_u8(args, flat),
-        })?;
+        if store.replay_enabled() {
+            store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| {
+                HostFuncEntryEvent {
+                    args: RRFuncArgVals::from_flat_iter(args, flat),
+                }
+            })?;
+        } else {
+            store.record_event_validation(|| HostFuncEntryEvent {
+                args: RRFuncArgVals::from_flat_iter(args, flat),
+            })?;
+        }
     }
-    let _ = (args, flat, store);
     Ok(())
 }
 
 /// Record hook operation for host function return events
 #[inline]
-pub fn record_host_func_return<T>(args: &[T], flat: &[u8], store: &mut StoreOpaque) -> Result<()>
+pub fn record_host_func_return<T>(
+    args: &[T],
+    flat: impl Iterator<Item = u8>,
+    store: &mut StoreOpaque,
+) -> Result<()>
 where
     T: FlatBytes,
 {
+    let _ = (args, &flat, &store);
     // Record the return values
     #[cfg(feature = "rr")]
     store.record_event(|| HostFuncReturnEvent {
-        args: RRFuncArgVals::from_flat_u8(args, flat),
+        args: RRFuncArgVals::from_flat_iter(args, flat),
     })?;
-    let _ = (args, flat, store);
     Ok(())
 }
 

@@ -6,7 +6,7 @@ use crate::rr::{
     RREvent, ReplayError, Validate, component_hooks::ReplayLoweringPhase, core_events,
 };
 use crate::{
-    AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, ValRaw, ValType, prelude::*,
+    AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, ValRaw, prelude::*,
 };
 use alloc::collections::BTreeMap;
 use core::mem::MaybeUninit;
@@ -251,7 +251,7 @@ impl<'a> ReplayInstance<'a> {
                     .into_func()
                     .ok_or(ReplayError::InvalidCoreFuncIndex(entity))?;
 
-                let params_ty = func.ty(&store).params().collect::<Vec<ValType>>();
+                let params_ty = func.ty(&store).params().collect::<Vec<_>>();
 
                 // Obtain the argument values for function call
                 let mut results = vec![crate::Val::I64(0); func.ty(&store).results().len()];

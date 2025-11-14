@@ -62,7 +62,8 @@ impl fmt::Debug for RRFuncArgVals {
 
 impl RRFuncArgVals {
     /// Construct [`RRFuncArgVals`] from raw value buffer and a flat size iterator
-    pub fn from_raw_slice<T>(args: &[T], flat: impl Iterator<Item = u8>) -> RRFuncArgVals
+    #[inline]
+    pub fn from_flat_iter<T>(args: &[T], flat: impl Iterator<Item = u8>) -> RRFuncArgVals
     where
         T: FlatBytes,
     {
@@ -77,22 +78,16 @@ impl RRFuncArgVals {
 
     /// Construct [`RRFuncArgVals`] from raw value buffer and a [`FlatTypesStorage`]
     #[cfg(feature = "rr-component")]
+    #[inline]
     pub fn from_flat_storage<T>(args: &[T], flat: FlatTypesStorage) -> RRFuncArgVals
     where
         T: FlatBytes,
     {
-        RRFuncArgVals::from_raw_slice(args, flat.iter32())
-    }
-
-    /// Construct [`RRFuncArgVals`] from raw value buffer and a `[&u8]` slice
-    pub fn from_flat_u8<T>(args: &[T], flat: &[u8]) -> RRFuncArgVals
-    where
-        T: FlatBytes,
-    {
-        RRFuncArgVals::from_raw_slice(args, flat.iter().copied())
+        RRFuncArgVals::from_flat_iter(args, flat.iter32())
     }
 
     /// Encode [`RRFuncArgVals`] back into raw value buffer
+    #[inline]
     pub fn into_raw_slice<T>(self, raw_args: &mut [T])
     where
         T: FlatBytes,
@@ -104,7 +99,8 @@ impl RRFuncArgVals {
         }
     }
 
-    /// Generate a vector of [`crate::Val`] from [`RRFuncArgVals`]
+    /// Generate a vector of [`crate::Val`] from [`RRFuncArgVals`] and [`ValType`]s
+    #[inline]
     pub fn to_val_vec(self, mut store: impl AsContextMut, val_types: Vec<ValType>) -> Vec<Val> {
         let mut pos = 0;
         let mut vals = Vec::new();

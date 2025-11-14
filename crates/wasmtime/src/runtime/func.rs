@@ -1291,12 +1291,11 @@ impl Func {
         let flat_params = ty
             .params()
             .into_iter()
-            .map(|x| x.to_wasm_type().byte_size())
-            .collect::<Vec<_>>();
+            .map(|x| x.to_wasm_type().byte_size());
 
         rr::core_hooks::record_and_replay_validate_host_func_entry(
             values_vec,
-            &flat_params,
+            flat_params,
             &mut caller.store.0,
         )?;
 
@@ -1322,13 +1321,8 @@ impl Func {
             let flat_results = ty
                 .results()
                 .into_iter()
-                .map(|x| x.to_wasm_type().byte_size())
-                .collect::<Vec<_>>();
-            rr::core_hooks::record_host_func_return(
-                values_vec,
-                &flat_results,
-                &mut caller.store.0,
-            )?;
+                .map(|x| x.to_wasm_type().byte_size());
+            rr::core_hooks::record_host_func_return(values_vec, flat_results, &mut caller.store.0)?;
         } else {
             rr::core_hooks::replay_host_func_return(values_vec, &mut caller.store.0)?;
         }
@@ -2430,30 +2424,23 @@ impl HostContext {
             };
             let func = &state.func;
 
-            let (flat_size_params, flat_size_results) = {
-                let type_index = state._ty.index();
-                let wasm_func_subtype = caller.engine().signatures().borrow(type_index).unwrap();
-                let wasm_func_type = wasm_func_subtype.unwrap_func();
-                (
-                    wasm_func_type
-                        .params()
-                        .into_iter()
-                        .map(|x| x.byte_size())
-                        .collect::<Vec<_>>(),
-                    wasm_func_type
-                        .returns()
-                        .into_iter()
-                        .map(|x| x.byte_size())
-                        .collect::<Vec<_>>(),
-                )
-            };
-            let (num_params, num_results) = (flat_size_params.len(), flat_size_results.len());
+            let type_index = state._ty.index();
+            let wasm_func_subtype = caller.engine().signatures().borrow(type_index).unwrap();
+            let wasm_func_type = wasm_func_subtype.unwrap_func();
+            let (num_params, flat_size_params) = (
+                wasm_func_type.params().len(),
+                wasm_func_type.params().into_iter().map(|x| x.byte_size()),
+            );
+            let (num_results, flat_size_results) = (
+                wasm_func_type.returns().len(),
+                wasm_func_type.returns().into_iter().map(|x| x.byte_size()),
+            );
 
             // Record/replay(validation) of the raw parameter arguments
             // Don't need auto-assert GC store here since we aren't using P, just raw args
             rr::core_hooks::record_and_replay_validate_host_func_entry(
                 unsafe { &args.as_ref()[..num_params] },
-                flat_size_params.as_slice(),
+                flat_size_params,
                 caller.store.0,
             )?;
 
@@ -2498,7 +2485,7 @@ impl HostContext {
                 // Record the return values
                 rr::core_hooks::record_host_func_return(
                     unsafe { &args.as_ref()[..num_results] },
-                    flat_size_results.as_slice(),
+                    flat_size_results,
                     caller.store.0,
                 )?;
             } else {
