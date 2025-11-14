@@ -233,10 +233,6 @@ macro_rules! event_error_types {
     );
 }
 
-event_error_types! {
-    pub struct WasmFuncReturnError(..)
-}
-
 /// Events used as markers for debugging/testing in traces
 ///
 /// Marker events should be injectable at any point in a record
