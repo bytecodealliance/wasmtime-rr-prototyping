@@ -257,11 +257,12 @@ where
 
     let types = vminstance.component().types().clone();
 
-    rr::component_hooks::record_and_replay_validate_host_func_entry(storage, &types, &ty, store.0)?;
-
     let func_ty = &types[ty];
     let param_tys = InterfaceType::Tuple(func_ty.params);
     let result_tys = InterfaceType::Tuple(func_ty.results);
+
+    rr::component_hooks::record_validate_host_func_entry(storage, &types, &ty, store.0)?;
+    rr::component_hooks::replay_validate_host_func_entry(storage, &types, &ty, store.0)?;
 
     let storage_type = if async_ {
         #[cfg(feature = "component-model-async")]
@@ -373,7 +374,9 @@ where
         {
             match storage_type {
                 #[cfg(feature = "component-model-async")]
-                StorageType::Async(_) => unreachable!("`rr` should not be configurable with async"),
+                StorageType::Async(_) => {
+                    unreachable!("`rr` should not be configurable with `component-model-async`")
+                }
                 StorageType::Sync(mut storage) => {
                     unsafe {
                         flags.set_may_leave(false);
@@ -813,13 +816,12 @@ where
 
     let types = instance.id().get(store.0).component().types().clone();
 
-    rr::component_hooks::record_and_replay_validate_host_func_entry(storage, &types, &ty, store.0)?;
-
     let func_ty = &types[ty];
     let param_tys = &types[func_ty.params];
     let result_tys = &types[func_ty.results];
 
     if !store.0.replay_enabled() {
+        rr::component_hooks::record_validate_host_func_entry(storage, &types, &ty, store.0)?;
         let mut params_and_results = Vec::new();
         let mut lift = &mut LiftContext::new(store.0.store_opaque_mut(), &options, instance);
         lift.enter_call();
@@ -967,9 +969,10 @@ where
             cx.exit_call()?;
         }
     } else {
+        rr::component_hooks::replay_validate_host_func_entry(storage, &types, &ty, store.0)?;
         #[cfg(feature = "rr-component")]
         if async_ {
-            unreachable!("`rr` should not be configurable with async");
+            unreachable!("`rr` should not be configurable with `component-model-async`");
         } else {
             unsafe {
                 flags.set_may_leave(false);

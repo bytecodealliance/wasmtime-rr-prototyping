@@ -1287,19 +1287,17 @@ impl Func {
         let nparams = ty.params().len();
         val_vec.reserve(nparams + ty.results().len());
 
-        // Recording host function entry
         let flat_params = ty
             .params()
             .into_iter()
             .map(|x| x.to_wasm_type().byte_size());
 
-        rr::core_hooks::record_and_replay_validate_host_func_entry(
-            values_vec,
-            flat_params,
-            &mut caller.store.0,
-        )?;
-
         if !caller.store.0.replay_enabled() {
+            rr::core_hooks::record_validate_host_func_entry(
+                values_vec,
+                flat_params,
+                &mut caller.store.0,
+            )?;
             for (i, ty) in ty.params().enumerate() {
                 val_vec.push(unsafe { Val::from_raw(&mut caller.store, values_vec[i], ty) })
             }
@@ -1324,6 +1322,11 @@ impl Func {
                 .map(|x| x.to_wasm_type().byte_size());
             rr::core_hooks::record_host_func_return(values_vec, flat_results, &mut caller.store.0)?;
         } else {
+            rr::core_hooks::replay_validate_host_func_entry(
+                values_vec,
+                flat_params,
+                &mut caller.store.0,
+            )?;
             rr::core_hooks::replay_host_func_return(values_vec, &mut caller.store.0)?;
         }
 
@@ -2436,15 +2439,13 @@ impl HostContext {
                 wasm_func_type.returns().into_iter().map(|x| x.byte_size()),
             );
 
-            // Record/replay(validation) of the raw parameter arguments
-            // Don't need auto-assert GC store here since we aren't using P, just raw args
-            rr::core_hooks::record_and_replay_validate_host_func_entry(
-                unsafe { &args.as_ref()[..num_params] },
-                flat_size_params,
-                caller.store.0,
-            )?;
-
             if !caller.store.0.replay_enabled() {
+                // Don't need auto-assert GC store here since we aren't using P, just raw args for recording
+                rr::core_hooks::record_validate_host_func_entry(
+                    unsafe { &args.as_ref()[..num_params] },
+                    flat_size_params,
+                    caller.store.0,
+                )?;
                 let ret = 'ret: {
                     if let Err(trap) = caller.store.0.call_hook(CallHook::CallingHost) {
                         break 'ret R::fallible_from_error(trap);
@@ -2489,6 +2490,12 @@ impl HostContext {
                     caller.store.0,
                 )?;
             } else {
+                rr::core_hooks::replay_validate_host_func_entry(
+                    unsafe { &args.as_ref()[..num_params] },
+                    flat_size_params,
+                    caller.store.0,
+                )?;
+
                 // Replay the return values
                 rr::core_hooks::replay_host_func_return(
                     unsafe { &mut args.as_mut()[..num_results] },

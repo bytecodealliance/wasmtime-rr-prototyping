@@ -65,9 +65,9 @@ where
     return result;
 }
 
-/// Record and replay hook operation for host function entry events
+/// Record hook operation for host function entry events
 #[inline]
-pub fn record_and_replay_validate_host_func_entry<T>(
+pub fn record_validate_host_func_entry<T>(
     args: &[T],
     flat: impl Iterator<Item = u8>,
     store: &mut StoreOpaque,
@@ -77,20 +77,9 @@ where
 {
     let _ = (args, &flat, &store);
     #[cfg(all(feature = "rr", feature = "rr-validate"))]
-    {
-        // Record/replay the raw parameter args
-        if store.replay_enabled() {
-            store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| {
-                HostFuncEntryEvent {
-                    args: RRFuncArgVals::from_flat_iter(args, flat),
-                }
-            })?;
-        } else {
-            store.record_event_validation(|| HostFuncEntryEvent {
-                args: RRFuncArgVals::from_flat_iter(args, flat),
-            })?;
-        }
-    }
+    store.record_event_validation(|| HostFuncEntryEvent {
+        args: RRFuncArgVals::from_flat_iter(args, flat),
+    })?;
     Ok(())
 }
 
@@ -108,6 +97,24 @@ where
     // Record the return values
     #[cfg(feature = "rr")]
     store.record_event(|| HostFuncReturnEvent {
+        args: RRFuncArgVals::from_flat_iter(args, flat),
+    })?;
+    Ok(())
+}
+
+/// Replay hook operation for host function entry events
+#[inline]
+pub fn replay_validate_host_func_entry<T>(
+    args: &[T],
+    flat: impl Iterator<Item = u8>,
+    store: &mut StoreOpaque,
+) -> Result<()>
+where
+    T: FlatBytes,
+{
+    let _ = (args, &flat, &store);
+    #[cfg(all(feature = "rr", feature = "rr-validate"))]
+    store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| HostFuncEntryEvent {
         args: RRFuncArgVals::from_flat_iter(args, flat),
     })?;
     Ok(())
