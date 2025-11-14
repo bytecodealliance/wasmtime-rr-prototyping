@@ -16,8 +16,6 @@ pub struct InstantiationEvent {
 /// A call event from Host into a core Wasm function
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WasmFuncEntryEvent {
-    /// Checksum of module containing function
-    pub module: [u8; 32],
     /// Origin (instance + function index) for this function
     pub origin: WasmFuncOrigin,
     /// Raw values passed across call boundary

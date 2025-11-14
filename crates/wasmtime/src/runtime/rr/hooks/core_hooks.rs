@@ -5,8 +5,6 @@ use crate::rr::core_events::{HostFuncReturnEvent, WasmFuncEntryEvent};
 use crate::rr::{
     RRFuncArgVals, ResultEvent, core_events::HostFuncEntryEvent, core_events::WasmFuncReturnEvent,
 };
-#[cfg(feature = "rr")]
-use crate::store::StoreInstanceId;
 use crate::store::StoreOpaque;
 use crate::{FuncType, StoreContextMut, ValRaw, WasmFuncOrigin, prelude::*};
 
@@ -28,15 +26,9 @@ where
     #[cfg(feature = "rr")]
     {
         if let Some(origin) = origin {
-            let checksum = *store
-                .0
-                .module_for_instance(StoreInstanceId::new(store.0.id(), origin.instance))
-                .unwrap()
-                .checksum();
             store.0.record_event(|| {
                 let flat = ty.params().map(|t| t.to_wasm_type().byte_size());
                 WasmFuncEntryEvent {
-                    module: checksum,
                     origin,
                     args: RRFuncArgVals::from_flat_iter(args, flat),
                 }

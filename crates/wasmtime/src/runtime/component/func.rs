@@ -552,14 +552,11 @@ impl Func {
         {
             use crate::rr::component_events::WasmFuncBeginEvent;
 
-            let component = *self.instance.id().get(store.0).component().checksum();
             let instance = self.instance.id().instance();
             let func_idx = self.index;
-            store.0.record_event(|| WasmFuncBeginEvent {
-                component,
-                instance,
-                func_idx,
-            })?;
+            store
+                .0
+                .record_event(|| WasmFuncBeginEvent { instance, func_idx })?;
         }
         let export = self.lifted_core_func(store.0);
 

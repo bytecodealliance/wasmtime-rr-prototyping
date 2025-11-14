@@ -1,10 +1,11 @@
 #[cfg(feature = "rr-component")]
-use crate::component::{self, Component};
+use crate::component::{self, Component, ComponentInstanceId};
 #[cfg(feature = "rr-component")]
 use crate::rr::component_events;
 use crate::rr::{
     RREvent, ReplayError, Validate, component_hooks::ReplayLoweringPhase, core_events,
 };
+use crate::store::InstanceId;
 use crate::{
     AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, ValRaw, prelude::*,
 };
@@ -92,8 +93,9 @@ pub struct ReplayInstance<T: 'static> {
     store: Store<T>,
     component_linker: component::Linker<T>,
     module_linker: crate::Linker<T>,
-    module_instances: BTreeMap<core_events::InstantiationEvent, crate::Instance>,
-    component_instances: BTreeMap<component_events::InstantiationEvent, component::Instance>,
+    module_instances: BTreeMap<InstanceId, crate::Instance>,
+    #[cfg(feature = "rr-component")]
+    component_instances: BTreeMap<ComponentInstanceId, component::Instance>,
 }
 
 impl<T: 'static> ReplayInstance<T> {
@@ -119,6 +121,7 @@ impl<T: 'static> ReplayInstance<T> {
             component_linker,
             module_linker,
             module_instances: BTreeMap::new(),
+            #[cfg(feature = "rr-component")]
             component_instances: BTreeMap::new(),
         })
     }
@@ -161,9 +164,8 @@ impl<T: 'static> ReplayInstance<T> {
                         instance: instance.id().instance(),
                     })?;
 
-                    let ret = self.component_instances.insert(event, instance);
-                    // Ensures that an already-instantiated configuration is not re-instantiated
-                    assert!(ret.is_none());
+                    self.component_instances
+                        .insert(instance.id().instance(), instance);
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
@@ -176,14 +178,11 @@ impl<T: 'static> ReplayInstance<T> {
                 #[cfg(feature = "rr-component")]
                 {
                     // Grab the correct component instance
-                    let key = component_events::InstantiationEvent {
-                        component: event.component,
-                        instance: event.instance,
-                    };
+                    let key = event.instance;
                     let instance = self
                         .component_instances
                         .get_mut(&key)
-                        .ok_or(ReplayError::MissingComponentInstance(key.instance.as_u32()))?;
+                        .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
 
                     // Replay lowering steps and obtain raw value arguments to raw function call
                     let func = component::Func::from_lifted_func(*instance, event.func_idx);
@@ -247,20 +246,15 @@ impl<T: 'static> ReplayInstance<T> {
                     instance: instance.id(),
                 })?;
 
-                let ret = self.module_instances.insert(event, instance);
-                // Ensures that an already-instantiated configuration is not re-instantiated
-                assert!(ret.is_none());
+                self.module_instances.insert(instance.id(), instance);
             }
             RREvent::CoreWasmFuncEntry(event) => {
                 // Grab the correct module instance
-                let key = core_events::InstantiationEvent {
-                    module: event.module,
-                    instance: event.origin.instance,
-                };
+                let key = event.origin.instance;
                 let instance = self
                     .module_instances
                     .get_mut(&key)
-                    .ok_or(ReplayError::MissingModuleInstance(key.instance.as_u32()))?;
+                    .ok_or(ReplayError::MissingModuleInstance(key.as_u32()))?;
 
                 let entity = EntityIndex::from(event.origin.index);
                 let mut store = self.store.as_context_mut();
@@ -316,9 +310,8 @@ impl<T: 'static> ReplayInstance<T> {
                         instance: instance.id().instance(),
                     })?;
 
-                    let ret = self.component_instances.insert(event, instance);
-                    // Ensures that an already-instantiated configuration is not re-instantiated
-                    assert!(ret.is_none());
+                    self.component_instances
+                        .insert(instance.id().instance(), instance);
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
@@ -331,14 +324,11 @@ impl<T: 'static> ReplayInstance<T> {
                 #[cfg(feature = "rr-component")]
                 {
                     // Grab the correct component instance
-                    let key = component_events::InstantiationEvent {
-                        component: event.component,
-                        instance: event.instance,
-                    };
+                    let key = event.instance;
                     let instance = self
                         .component_instances
                         .get_mut(&key)
-                        .ok_or(ReplayError::MissingComponentInstance(key.instance.as_u32()))?;
+                        .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
 
                     // Replay lowering steps and obtain raw value arguments to raw function call
                     let func = component::Func::from_lifted_func(*instance, event.func_idx);
@@ -405,20 +395,15 @@ impl<T: 'static> ReplayInstance<T> {
                     instance: instance.id(),
                 })?;
 
-                let ret = self.module_instances.insert(event, instance);
-                // Ensures that an already-instantiated configuration is not re-instantiated
-                assert!(ret.is_none());
+                self.module_instances.insert(instance.id(), instance);
             }
             RREvent::CoreWasmFuncEntry(event) => {
                 // Grab the correct module instance
-                let key = core_events::InstantiationEvent {
-                    module: event.module,
-                    instance: event.origin.instance,
-                };
+                let key = event.origin.instance;
                 let instance = self
                     .module_instances
                     .get_mut(&key)
-                    .ok_or(ReplayError::MissingModuleInstance(key.instance.as_u32()))?;
+                    .ok_or(ReplayError::MissingModuleInstance(key.as_u32()))?;
 
                 let entity = EntityIndex::from(event.origin.index);
                 let mut store = self.store.as_context_mut();

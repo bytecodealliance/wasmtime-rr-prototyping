@@ -13,8 +13,6 @@ use wasmtime_environ::{
 /// Beginning marker for a Wasm component function call from host
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WasmFuncBeginEvent {
-    /// Checksum of component containing function
-    pub component: [u8; 32],
     /// Instance ID for the component instance
     pub instance: ComponentInstanceId,
     /// Export index for the invoked function
