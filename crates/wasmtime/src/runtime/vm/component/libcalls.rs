@@ -167,14 +167,12 @@ mod trampolines {
             #[cfg(feature = "rr-component")]
             {
                 if let Some(buf) = (*$store).replay_buffer_mut() {
-                    #[cfg(feature = "rr-validate")]
                     buf.next_event_validation::<BuiltinEntryEvent, _>(&$rr_entry{ $($pname),* }.into())?;
                     // Replay the return value
                     let builtin_ret_event = buf.next_event_typed::<BuiltinReturnEvent>()?;
                     $rr_exit::try_from(builtin_ret_event)?.ret()
                 } else {
                     // Recording entry/return
-                    #[cfg(feature = "rr-validate")]
                     (*$store).record_event_validation::<BuiltinEntryEvent, _>(|| $rr_entry{ $($pname),* }.into())?;
                     let retval = shims!(@invoke $name($store, $instance,) $($pname)*);
                     (*$store).record_event::<BuiltinReturnEvent, _>(|| $rr_exit(ResultEvent::from_anyhow_result(&retval)).into())?;
@@ -193,11 +191,9 @@ mod trampolines {
             {
                 if let Some(_buf) = (*$store).replay_buffer_mut() {
                     // Just perform replay validation, if required
-                    #[cfg(feature = "rr-validate")]
                     _buf.next_event_validation::<BuiltinEntryEvent, _>(&$rr_entry{ $($pname),* }.into()).unwrap();
                 } else {
                     // Record entry only; return is not present
-                    #[cfg(feature = "rr-validate")]
                     (*$store).record_event_validation::<BuiltinEntryEvent, _>(|| $rr_entry{ $($pname),* }.into()).unwrap();
                     shims!(@invoke $name($store, $instance,) $($pname)*)
                 }

@@ -3,8 +3,6 @@
 use super::*;
 use crate::component::ComponentInstanceId;
 use crate::vm::component::libcalls::ResourceDropRet;
-// Re-export common events from this module
-pub use common_events::*;
 use wasmtime_environ::{
     self,
     component::{ExportIndex, InterfaceType},

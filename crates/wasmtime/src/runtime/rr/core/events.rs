@@ -1,4 +1,3 @@
-#[cfg(any(feature = "rr-component", feature = "rr-validate"))]
 use super::ReplayError;
 use crate::rr::FlatBytes;
 use crate::{AsContextMut, Val, prelude::*};
@@ -116,13 +115,11 @@ impl RRFuncArgVals {
 /// Trait signifying types that can be validated on replay
 ///
 /// All `PartialEq` types are directly validatable with themselves.
-/// Note however that some [`Validate`] implementations are present even
-/// when feature `rr-validate` is disabled, when validation is needed
-/// for a faithful replay (e.g. [`component_events::InstantiationEvent`]).
+/// Note however that some [`Validate`] implementations are present and
+/// required for a faithful replay (e.g. [`component_events::InstantiationEvent`]).
 ///
 /// In terms of usage, an event that implements `Validate` can call
 /// any RR validation methods on a `Store`
-#[cfg(any(feature = "rr-component", feature = "rr-validate"))]
 pub trait Validate<T: ?Sized> {
     /// Perform a validation of the event to ensure replay consistency
     fn validate(&self, expect: &T) -> Result<(), ReplayError>;
@@ -136,7 +133,6 @@ pub trait Validate<T: ?Sized> {
     }
 }
 
-#[cfg(any(feature = "rr-component", feature = "rr-validate"))]
 impl<T> Validate<T> for T
 where
     T: PartialEq + fmt::Debug,

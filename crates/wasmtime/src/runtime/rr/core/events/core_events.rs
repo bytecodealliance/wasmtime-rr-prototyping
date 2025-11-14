@@ -1,8 +1,6 @@
 //! Module comprising of core wasm events
 use super::*;
 use crate::{WasmFuncOrigin, store::InstanceId};
-// Re-export common events from this module
-pub use common_events::*;
 
 /// A core Wasm instantiatation event
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]

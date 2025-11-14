@@ -241,8 +241,10 @@ impl RunCommand {
                     RunTarget::Core(m) => {
                         renv.add_module(m.clone());
                     }
-                    RunTarget::Component(c) => {
-                        renv.add_component(c.clone());
+                    #[cfg(feature = "component-model")]
+                    RunTarget::Component(_c) => {
+                        #[cfg(feature = "rr-component")]
+                        renv.add_component(_c.clone());
                     }
                 }
                 let mut replay_instance = renv.instantiate_with_store(

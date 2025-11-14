@@ -11,7 +11,7 @@ use crate::rr::{ConstMemorySliceCell, MemorySliceCell};
 use crate::rr::{
     RREvent, RecordBuffer, ReplayError, Replayer, component_events::ReallocEntryEvent,
 };
-#[cfg(all(feature = "rr-component", feature = "rr-validate"))]
+#[cfg(feature = "rr-component")]
 use crate::rr::{ResultEvent, Validate, component_events::ReallocReturnEvent};
 use crate::runtime::vm::component::{
     CallContexts, ComponentInstance, InstanceFlags, ResourceTable, ResourceTables,
@@ -403,7 +403,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
             new_size,
         })?;
         let result = self.realloc_inner(old, old_size, old_align, new_size);
-        #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
+        #[cfg(feature = "rr-component")]
         self.store.0.record_event_validation(|| {
             ReallocReturnEvent(ResultEvent::from_anyhow_result(&result))
         })?;
@@ -576,23 +576,19 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         mut result_storage: Option<&mut [MaybeUninit<ValRaw>]>,
         phase: ReplayLoweringPhase,
     ) -> Result<()> {
-        // There is a lot of `rr-validate` feature gating here for optimal replay performance
-        // and memory overhead in a non-validating scenario. If this proves to not produce a huge
-        // overhead in practice, gating can be removed in the future in favor of readability
         if self.store.0.replay_buffer_mut().is_none() {
             return Ok(());
         }
         let mut complete = false;
         let mut lowering_error: Option<ReplayError> = None;
         // No nested expected; these depths should only be 1
-        let mut _realloc_stack = Vec::<Result<usize>>::new();
+        let mut realloc_stack = Vec::<Result<usize>>::new();
         // Lowering tracks is only for ordering entry/exit events
-        let mut _lower_stack = Vec::<()>::new();
-        let mut _lower_store_stack = Vec::<()>::new();
+        let mut lower_stack = Vec::<()>::new();
+        let mut lower_store_stack = Vec::<()>::new();
         while !complete {
             let buf = self.store.0.replay_buffer_mut().unwrap();
             let event = buf.next_event()?;
-            #[cfg(feature = "rr-validate")]
             let run_validate = buf.settings().validate && buf.trace_settings().add_validation;
             match event {
                 RREvent::HostFuncReturn(e) => {
@@ -624,27 +620,22 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                     complete = true;
                 }
                 RREvent::ComponentReallocEntry(e) => {
-                    let _result =
+                    let result =
                         self.realloc_inner(e.old_addr, e.old_size, e.old_align, e.new_size);
-                    #[cfg(feature = "rr-validate")]
                     if run_validate {
-                        _realloc_stack.push(_result);
+                        realloc_stack.push(result);
                     }
                 }
                 // No return value to validate for lower/lower-store; store error and just check that entry happened before
                 RREvent::ComponentLowerFlatReturn(e) => {
-                    #[cfg(feature = "rr-validate")]
                     if run_validate {
-                        _lower_stack
-                            .pop()
-                            .ok_or(ReplayError::InvalidEventPosition)?;
+                        lower_stack.pop().ok_or(ReplayError::InvalidEventPosition)?;
                     }
                     lowering_error = e.0.ret().map_err(Into::into).err();
                 }
                 RREvent::ComponentLowerMemoryReturn(e) => {
-                    #[cfg(feature = "rr-validate")]
                     if run_validate {
-                        _lower_store_stack
+                        lower_store_stack
                             .pop()
                             .ok_or(ReplayError::InvalidEventPosition)?;
                     }
@@ -664,25 +655,21 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                     bail!("Cannot call into host during lowering")
                 }
                 // Unwrapping should never occur on valid executions since *Entry should be before *Return in trace
-                RREvent::ComponentReallocReturn(_e) =>
-                {
-                    #[cfg(feature = "rr-validate")]
+                RREvent::ComponentReallocReturn(e) => {
                     if run_validate {
-                        lowering_error = _e.0.validate(&_realloc_stack.pop().unwrap()).err()
+                        lowering_error = e.0.validate(&realloc_stack.pop().unwrap()).err()
                     }
                 }
                 RREvent::ComponentLowerFlatEntry(_) => {
                     // All we want here is ensuring Entry occurs before Return
-                    #[cfg(feature = "rr-validate")]
                     if run_validate {
-                        _lower_stack.push(())
+                        lower_stack.push(())
                     }
                 }
                 RREvent::ComponentLowerMemoryEntry(_) => {
                     // All we want here is ensuring Entry occurs before Return
-                    #[cfg(feature = "rr-validate")]
                     if run_validate {
-                        _lower_store_stack.push(())
+                        lower_store_stack.push(())
                     }
                 }
 

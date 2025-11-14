@@ -1,16 +1,16 @@
-#[cfg(feature = "rr-component")]
-use crate::component::{self, Component, ComponentInstanceId};
-#[cfg(feature = "rr-component")]
-use crate::rr::component_events;
-use crate::rr::{
-    RREvent, ReplayError, Validate, component_hooks::ReplayLoweringPhase, core_events,
-};
+use crate::rr::Validate;
+use crate::rr::{RREvent, ReplayError, core_events};
 use crate::store::InstanceId;
+use crate::{AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, prelude::*};
+#[cfg(feature = "rr-component")]
 use crate::{
-    AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, ValRaw, prelude::*,
+    ValRaw, component, component::Component, component::ComponentInstanceId, rr::component_events,
+    rr::component_hooks,
 };
-use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
+use alloc::{collections::BTreeMap, sync::Arc};
+#[cfg(not(feature = "rr-component"))]
+use anyhow::bail;
+#[cfg(feature = "rr-component")]
 use core::mem::MaybeUninit;
 use wasmtime_environ::EntityIndex;
 #[cfg(feature = "rr-component")]
@@ -21,6 +21,7 @@ use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 pub struct ReplayEnvironment {
     engine: Engine,
     modules: BTreeMap<[u8; 32], Module>,
+    #[cfg(feature = "rr-component")]
     components: BTreeMap<[u8; 32], Component>,
     settings: ReplaySettings,
 }
@@ -31,6 +32,7 @@ impl ReplayEnvironment {
         Self {
             engine: engine.clone(),
             modules: BTreeMap::new(),
+            #[cfg(feature = "rr-component")]
             components: BTreeMap::new(),
             settings,
         }
@@ -43,6 +45,7 @@ impl ReplayEnvironment {
     }
 
     /// Add a [`Component`] to the replay environment
+    #[cfg(feature = "rr-component")]
     pub fn add_component(&mut self, component: Component) -> &mut Self {
         self.components.insert(*component.checksum(), component);
         self
@@ -91,6 +94,7 @@ impl ReplayEnvironment {
 pub struct ReplayInstance<T: 'static> {
     env: Arc<ReplayEnvironment>,
     store: Store<T>,
+    #[cfg(feature = "rr-component")]
     component_linker: component::Linker<T>,
     module_linker: crate::Linker<T>,
     module_instances: BTreeMap<InstanceId, crate::Instance>,
@@ -106,18 +110,21 @@ impl<T: 'static> ReplayInstance<T> {
     ) -> Result<Self> {
         let env = Arc::new(env);
         store.init_replaying(reader, env.settings.clone())?;
-        let mut component_linker = component::Linker::<T>::new(&env.engine);
         let mut module_linker = crate::Linker::<T>::new(&env.engine);
         // Replays shouldn't use any imports, so stub them all out as traps
         for module in env.modules.values() {
             module_linker.define_unknown_imports_as_traps(module)?;
         }
+        #[cfg(feature = "rr-component")]
+        let mut component_linker = component::Linker::<T>::new(&env.engine);
+        #[cfg(feature = "rr-component")]
         for component in env.components.values() {
             component_linker.define_unknown_imports_as_traps(component)?;
         }
         Ok(Self {
             env,
             store,
+            #[cfg(feature = "rr-component")]
             component_linker,
             module_linker,
             module_instances: BTreeMap::new(),
@@ -146,6 +153,7 @@ impl<T: 'static> ReplayInstance<T> {
     pub fn run_single_top_level_event(&mut self, rr_event: RREvent) -> Result<()> {
         match rr_event {
             RREvent::ComponentInstantiation(event) => {
+                let _ = event;
                 #[cfg(feature = "rr-component")]
                 {
                     // Find matching component from environment to instantiate
@@ -169,12 +177,13 @@ impl<T: 'static> ReplayInstance<T> {
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
-                    anyhow!(
+                    bail!(
                         "Cannot parse ComponentInstantation replay event without rr-component feature enabled"
                     );
                 }
             }
             RREvent::ComponentWasmFuncBegin(event) => {
+                let _ = event;
                 #[cfg(feature = "rr-component")]
                 {
                     // Grab the correct component instance
@@ -200,7 +209,7 @@ impl<T: 'static> ReplayInstance<T> {
                                 |cx, _, dst: &mut MaybeUninit<[MaybeUninit<ValRaw>; MAX_FLAT_PARAMS]>| {
                                     // For lowering, use replay instead of actual lowering
                                     let dst: &mut [MaybeUninit<ValRaw>] = dst.assume_init_mut();
-                                    cx.replay_lowering(Some(dst), ReplayLoweringPhase::WasmFuncEntry)
+                                    cx.replay_lowering(Some(dst), component_hooks::ReplayLoweringPhase::WasmFuncEntry)
                                 },
                                 |cx, results_ty, src: &[ValRaw; MAX_FLAT_RESULTS]| {
                                     // Lifting can proceed exactly as normal
@@ -223,7 +232,7 @@ impl<T: 'static> ReplayInstance<T> {
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
-                    anyhow!(
+                    bail!(
                         "Cannot parse ComponentWasmFuncBegin replay event without rr-component feature enabled"
                     );
                 }
@@ -291,6 +300,7 @@ impl<T: 'static> ReplayInstance<T> {
     {
         match rr_event {
             RREvent::ComponentInstantiation(event) => {
+                let _ = event;
                 #[cfg(feature = "rr-component")]
                 {
                     // Find matching component from environment to instantiate
@@ -315,12 +325,13 @@ impl<T: 'static> ReplayInstance<T> {
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
-                    anyhow!(
+                    bail!(
                         "Cannot parse ComponentInstantation replay event without rr-component feature enabled"
                     );
                 }
             }
             RREvent::ComponentWasmFuncBegin(event) => {
+                let _ = event;
                 #[cfg(feature = "rr-component")]
                 {
                     // Grab the correct component instance
@@ -347,7 +358,7 @@ impl<T: 'static> ReplayInstance<T> {
                                 |cx, _, dst: &mut MaybeUninit<[MaybeUninit<ValRaw>; MAX_FLAT_PARAMS]>| {
                                     // For lowering, use replay instead of actual lowering
                                     let dst: &mut [MaybeUninit<ValRaw>] = dst.assume_init_mut();
-                                    cx.replay_lowering(Some(dst), ReplayLoweringPhase::WasmFuncEntry)
+                                    cx.replay_lowering(Some(dst), component_hooks::ReplayLoweringPhase::WasmFuncEntry)
                                 },
                                 |cx, results_ty, src: &[ValRaw; MAX_FLAT_RESULTS]| {
                                     // Lifting can proceed exactly as normal
@@ -371,7 +382,7 @@ impl<T: 'static> ReplayInstance<T> {
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
-                    anyhow!(
+                    bail!(
                         "Cannot parse ComponentWasmFuncBegin replay event without rr-component feature enabled"
                     );
                 }

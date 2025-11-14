@@ -1022,11 +1022,6 @@ impl CommonOptions {
         match_feature! {
             ["rr" : &record.path]
             _path => {
-                match_feature! {
-                    ["rr-validate": record.validation_metadata]
-                    _v => (),
-                    _ => err,
-                }
                 config.rr(wasmtime::RRConfig::Recording);
             },
             _ => err,

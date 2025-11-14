@@ -7,18 +7,14 @@ use wasmtime_environ::EntityIndex;
 // Use component events internally even without feature flags enabled
 // so that [`RREvent`] has a well-defined serialization format, but export
 // it for other modules only when enabled
-#[cfg(all(feature = "rr-validate", feature = "rr-component"))]
-pub use events::RRFuncArgVals;
-#[cfg(any(feature = "rr-validate", feature = "rr-component"))]
 pub use events::Validate;
 #[cfg(feature = "rr-component")]
 pub use events::component_events;
-pub use events::{ResultEvent, core_events, marker_events};
-use events::{common_events, component_events as __component_events};
+use events::component_events as __component_events;
+pub use events::{RRFuncArgVals, ResultEvent, common_events, core_events, marker_events};
 pub use io::{IOError, RecordWriter, ReplayReader};
 
 /// Settings for execution recording.
-#[cfg(feature = "rr")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordSettings {
     /// Flag to include additional signatures for replay validation.
@@ -27,7 +23,6 @@ pub struct RecordSettings {
     pub event_window_size: usize,
 }
 
-#[cfg(feature = "rr")]
 impl Default for RecordSettings {
     fn default() -> Self {
         Self {
@@ -38,7 +33,6 @@ impl Default for RecordSettings {
 }
 
 /// Settings for execution replay.
-#[cfg(feature = "rr")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplaySettings {
     /// Flag to include additional signatures for replay validation.
@@ -47,7 +41,6 @@ pub struct ReplaySettings {
     pub deser_buffer_size: usize,
 }
 
-#[cfg(feature = "rr")]
 impl Default for ReplaySettings {
     fn default() -> Self {
         Self {
@@ -304,7 +297,6 @@ pub trait Recorder {
 
     /// Record a event only when validation is requested
     #[inline]
-    #[cfg(feature = "rr-validate")]
     fn record_event_validation<T, F>(&mut self, f: F) -> Result<()>
     where
         T: Into<RREvent>,
@@ -379,7 +371,6 @@ pub trait Replayer: Iterator<Item = Result<RREvent, ReplayError>> {
     /// In addition to errors in [`next_event_typed`](Replayer::next_event_typed),
     /// validation errors can be thrown
     #[inline]
-    #[cfg(feature = "rr-validate")]
     fn next_event_validation<T, Y>(&mut self, expect: &Y) -> Result<(), ReplayError>
     where
         T: TryFrom<RREvent> + Validate<Y>,
@@ -568,11 +559,19 @@ impl Replayer for ReplayBuffer {
     }
 
     #[inline]
+    #[allow(
+        unused,
+        reason = "method only used for gated validation, but will be extended in the future"
+    )]
     fn settings(&self) -> &ReplaySettings {
         &self.settings
     }
 
     #[inline]
+    #[allow(
+        unused,
+        reason = "method only used for gated validation, but will be extended in the future"
+    )]
     fn trace_settings(&self) -> &RecordSettings {
         &self.trace_settings
     }

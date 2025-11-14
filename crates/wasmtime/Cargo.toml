@@ -410,7 +410,3 @@ rr-component = ["component-model", "rr"]
 # Enable support for the common base infrastructure of record/replay
 # By default, this supports core wasm `rr`. For components, enable `rr-component`
 rr = ["dep:embedded-io"]
-
-# Enables record/replay with support for additional validation signatures/checks.
-rr-validate = ["rr"]
-

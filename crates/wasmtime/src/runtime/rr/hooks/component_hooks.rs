@@ -2,15 +2,15 @@ use crate::ValRaw;
 #[cfg(feature = "component-model")]
 use crate::component::func::LowerContext;
 #[cfg(feature = "rr-component")]
-use crate::rr::ResultEvent;
-#[cfg(all(feature = "rr-component", feature = "rr-validate"))]
+use crate::rr::common_events::WasmFuncReturnEvent;
+#[cfg(feature = "rr-component")]
 use crate::rr::component_events::HostFuncEntryEvent;
 #[cfg(feature = "rr-component")]
 use crate::rr::component_events::{
-    HostFuncReturnEvent, LowerFlatReturnEvent, LowerMemoryReturnEvent, WasmFuncEntryEvent,
+    LowerFlatReturnEvent, LowerMemoryReturnEvent, WasmFuncEntryEvent,
 };
-#[cfg(all(feature = "rr-component", feature = "rr-validate"))]
-use crate::rr::{RRFuncArgVals, component_events::WasmFuncReturnEvent};
+#[cfg(feature = "rr-component")]
+use crate::rr::{RRFuncArgVals, ResultEvent, common_events::HostFuncReturnEvent};
 use crate::store::StoreOpaque;
 use crate::{StoreContextMut, prelude::*};
 use alloc::sync::Arc;
@@ -52,7 +52,7 @@ where
         }
     })?;
     let result = wasm_call(store);
-    #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
+    #[cfg(feature = "rr-component")]
     {
         let flat_results = types.flat_types_storage(
             &InterfaceType::Tuple(types[type_idx].results),
@@ -70,7 +70,7 @@ where
         result?;
         return Ok(());
     }
-    #[cfg(not(all(feature = "rr-component", feature = "rr-validate")))]
+    #[cfg(not(feature = "rr-component"))]
     return result;
 }
 
@@ -82,7 +82,7 @@ pub fn record_validate_host_func_entry(
     type_idx: &TypeFuncIndex,
     store: &mut StoreOpaque,
 ) -> Result<()> {
-    #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
+    #[cfg(feature = "rr-component")]
     store.record_event_validation(|| create_host_func_entry_event(args, types, type_idx))?;
     let _ = (args, types, type_idx, store);
     Ok(())
@@ -96,7 +96,7 @@ pub fn replay_validate_host_func_entry(
     type_idx: &TypeFuncIndex,
     store: &mut StoreOpaque,
 ) -> Result<()> {
-    #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
+    #[cfg(feature = "rr-component")]
     store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| {
         create_host_func_entry_event(args, types, type_idx)
     })?;
@@ -134,7 +134,7 @@ pub fn record_lower_memory<F, T>(
 where
     F: FnOnce(&mut LowerContext<'_, T>, InterfaceType, usize) -> Result<()>,
 {
-    #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
+    #[cfg(feature = "rr-component")]
     {
         use crate::rr::component_events::LowerMemoryEntryEvent;
         cx.store
@@ -159,7 +159,7 @@ pub fn record_lower_flat<F, T>(
 where
     F: FnOnce(&mut LowerContext<'_, T>, InterfaceType) -> Result<()>,
 {
-    #[cfg(all(feature = "rr-component", feature = "rr-validate"))]
+    #[cfg(feature = "rr-component")]
     {
         use crate::rr::component_events::LowerFlatEntryEvent;
         cx.store
@@ -174,7 +174,7 @@ where
     lower_result
 }
 
-#[cfg(all(feature = "rr-component", feature = "rr-validate"))]
+#[cfg(feature = "rr-component")]
 #[inline(always)]
 fn create_host_func_entry_event(
     args: &mut [MaybeUninit<ValRaw>],

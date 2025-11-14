@@ -85,12 +85,10 @@ use crate::component::concurrent;
 use crate::fiber;
 use crate::module::RegisteredModuleId;
 use crate::prelude::*;
-#[cfg(feature = "rr-validate")]
-use crate::rr::Validate;
 #[cfg(feature = "rr")]
 use crate::rr::{
     RREvent, RecordBuffer, RecordSettings, RecordWriter, Recorder, ReplayBuffer, ReplayError,
-    ReplayReader, ReplaySettings, Replayer,
+    ReplayReader, ReplaySettings, Replayer, Validate,
 };
 #[cfg(feature = "gc")]
 use crate::runtime::vm::GcRootsList;
@@ -1542,7 +1540,7 @@ impl StoreOpaque {
     /// if validation is enabled for recording
     ///
     /// Convenience wrapper around [`Recorder::record_event_validation`]
-    #[cfg(feature = "rr-validate")]
+    #[cfg(feature = "rr")]
     #[inline(always)]
     pub(crate) fn record_event_validation<T, F>(&mut self, f: F) -> Result<()>
     where
@@ -1578,7 +1576,7 @@ impl StoreOpaque {
     /// and if validation is enabled on replay, and run the validation check
     ///
     /// Convenience wrapper around [`Replayer::next_event_validation`]
-    #[cfg(feature = "rr-validate")]
+    #[cfg(feature = "rr")]
     #[inline]
     pub(crate) fn next_replay_event_validation<T, F, Y>(
         &mut self,

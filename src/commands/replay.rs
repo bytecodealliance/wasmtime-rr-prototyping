@@ -43,10 +43,6 @@ pub struct ReplayCommand {
 impl ReplayCommand {
     /// Executes the command.
     pub fn execute(self) -> Result<()> {
-        #[cfg(not(feature = "rr-validate"))]
-        if self.replay_opts.validate {
-            anyhow::bail!("Cannot use `validate` when `rr-validate` feature is disabled");
-        }
         // Replay uses the `run` command harness
         self.run_cmd.execute(Some(self.replay_opts))
     }

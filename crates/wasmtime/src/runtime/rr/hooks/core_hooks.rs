@@ -1,9 +1,9 @@
 use crate::rr::FlatBytes;
 #[cfg(feature = "rr")]
-use crate::rr::core_events::{HostFuncReturnEvent, WasmFuncEntryEvent};
-#[cfg(all(feature = "rr", feature = "rr-validate"))]
 use crate::rr::{
-    RRFuncArgVals, ResultEvent, core_events::HostFuncEntryEvent, core_events::WasmFuncReturnEvent,
+    RRFuncArgVals, ResultEvent, common_events::HostFuncReturnEvent,
+    common_events::WasmFuncReturnEvent, core_events::HostFuncEntryEvent,
+    core_events::WasmFuncEntryEvent,
 };
 use crate::store::StoreOpaque;
 use crate::{FuncType, StoreContextMut, ValRaw, WasmFuncOrigin, prelude::*};
@@ -36,7 +36,7 @@ where
         }
     }
     let result = wasm_call(store);
-    #[cfg(all(feature = "rr", feature = "rr-validate"))]
+    #[cfg(feature = "rr")]
     {
         if origin.is_some() {
             let flat = ty.results().map(|t| t.to_wasm_type().byte_size());
@@ -53,7 +53,7 @@ where
         }
         return Ok(());
     }
-    #[cfg(not(all(feature = "rr", feature = "rr-validate")))]
+    #[cfg(not(feature = "rr"))]
     return result;
 }
 
@@ -68,7 +68,7 @@ where
     T: FlatBytes,
 {
     let _ = (args, &flat, &store);
-    #[cfg(all(feature = "rr", feature = "rr-validate"))]
+    #[cfg(feature = "rr")]
     store.record_event_validation(|| HostFuncEntryEvent {
         args: RRFuncArgVals::from_flat_iter(args, flat),
     })?;
@@ -105,7 +105,7 @@ where
     T: FlatBytes,
 {
     let _ = (args, &flat, &store);
-    #[cfg(all(feature = "rr", feature = "rr-validate"))]
+    #[cfg(feature = "rr")]
     store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| HostFuncEntryEvent {
         args: RRFuncArgVals::from_flat_iter(args, flat),
     })?;
