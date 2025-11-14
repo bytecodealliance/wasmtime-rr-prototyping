@@ -1488,7 +1488,7 @@ impl StoreOpaque {
     }
 
     #[cfg(feature = "rr")]
-    pub fn init_replaying(
+    pub(crate) fn init_replaying(
         &mut self,
         replayer: impl ReplayReader + 'static,
         settings: ReplaySettings,
@@ -1500,6 +1500,10 @@ impl StoreOpaque {
         ensure!(
             self.engine().is_replaying(),
             "store replaying requires replaying enabled on config"
+        );
+        ensure!(
+            !self.engine().is_recording(),
+            "store replaying cannot be enabled while recording is enabled"
         );
         self.replay_buffer = Some(ReplayBuffer::new_replayer(replayer, settings)?);
         Ok(())
