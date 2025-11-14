@@ -28,3 +28,7 @@ impl Validate<&Result<RRFuncArgVals>> for WasmFuncReturnEvent {
         self.0.validate(*expect)
     }
 }
+
+event_error_types! {
+    pub struct WasmFuncReturnError(..)
+}
