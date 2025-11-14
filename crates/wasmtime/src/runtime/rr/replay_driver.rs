@@ -128,6 +128,11 @@ impl<T: 'static> ReplayInstance<T> {
         &self.store
     }
 
+    /// Consume the [`ReplayInstance`] and extract the internal [`Store`]
+    pub fn extract_store(self) -> Store<T> {
+        self.store
+    }
+
     /// Run a single top-level event from the instance
     ///
     /// "Top-level" events are those explicitly invoked events, namely:

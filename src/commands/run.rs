@@ -16,6 +16,8 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
+#[cfg(feature = "rr")]
+use tokio::time::error::Elapsed;
 use wasi_common::sync::{Dir, TcpListener, WasiCtxBuilder, ambient_authority};
 #[cfg(feature = "rr")]
 use wasmtime::ReplayEnvironment;
@@ -101,16 +103,16 @@ impl RunCommand {
     ) -> Result<()> {
         self.run.common.init_logging()?;
 
-        let mut config = self.run.common.config(None)?;
+        #[cfg(feature = "rr")]
+        let is_replaying = replay_opts.is_some();
         #[cfg(not(feature = "rr"))]
+        let is_replaying = false;
+
+        let mut config = self.run.common.config(None)?;
         config.async_support(true);
         #[cfg(feature = "rr")]
-        if replay_opts.is_some() {
-            // Replay does not support async yet
-            config.async_support(false);
+        if is_replaying {
             config.rr(wasmtime::RRConfig::Replaying);
-        } else {
-            config.async_support(true);
         }
 
         if self.run.common.wasm.timeout.is_some() {
@@ -173,13 +175,7 @@ impl RunCommand {
         };
 
         let mut store = Store::new(&engine, host);
-        #[cfg(not(feature = "rr"))]
         self.populate_with_wasi(&mut linker, &mut store, &main)?;
-        // For replay, we don't populate WASI
-        #[cfg(feature = "rr")]
-        if !replay_opts.is_some() {
-            self.populate_with_wasi(&mut linker, &mut store, &main)?;
-        }
 
         store.data_mut().limits = self.run.store_limits();
         store.limiter(|t| &mut t.limits);
@@ -192,32 +188,6 @@ impl RunCommand {
 
         #[cfg(feature = "rr")]
         {
-            // If this is a replay run, skip to replay setup and run to completion
-            //
-            // Note: Right now, replay doesn't inherit any store settings listed
-            // above. This will have to change in the future. In general, replays will
-            // need an "almost exact" superset of the run configurations, but with
-            // certain different options (e.g. fuel consumption).
-            if let Some(opts) = replay_opts {
-                let settings = ReplaySettings {
-                    validate: opts.validate,
-                    deser_buffer_size: opts.deser_buffer_size,
-                    ..Default::default()
-                };
-
-                let mut renv = ReplayEnvironment::new(&engine, settings);
-                match main {
-                    RunTarget::Core(m) => {
-                        renv.add_module(m);
-                    }
-                    RunTarget::Component(c) => {
-                        renv.add_component(c);
-                    }
-                }
-                let mut instance = renv.instantiate(BufReader::new(fs::File::open(opts.trace)?))?;
-                return instance.run_to_completion();
-            }
-
             // Recording settings for this execution's store
             let record = &self.run.common.record;
             if let Some(path) = &record.path {
@@ -251,61 +221,133 @@ impl RunCommand {
             .wasm
             .timeout
             .unwrap_or(std::time::Duration::MAX);
-        let result = runtime.block_on(async {
-            tokio::time::timeout(dur, async {
-                let mut profiled_modules: Vec<(String, Module)> = Vec::new();
-                if let RunTarget::Core(m) = &main {
-                    profiled_modules.push(("".to_string(), m.clone()));
+
+        let result = if is_replaying {
+            // Note: While replaying, we need to retrieveIn general, replays will need an "almost exact" superset of
+            // the run configurations, but with potentially certain different options (e.g. fuel consumption).
+            #[cfg(feature = "rr")]
+            {
+                struct OkReplayT(Store<Host>);
+                struct ErrReplayT(Error, Store<Host>);
+                let opts = replay_opts.unwrap();
+                let settings = ReplaySettings {
+                    validate: opts.validate,
+                    deser_buffer_size: opts.deser_buffer_size,
+                    ..Default::default()
+                };
+
+                let mut renv = ReplayEnvironment::new(&engine, settings);
+                match &main {
+                    RunTarget::Core(m) => {
+                        renv.add_module(m.clone());
+                    }
+                    RunTarget::Component(c) => {
+                        renv.add_component(c.clone());
+                    }
                 }
+                let mut replay_instance = renv.instantiate_with_store(
+                    || store,
+                    BufReader::new(fs::File::open(opts.trace)?),
+                )?;
 
-                // Load the preload wasm modules.
-                for (name, path) in self.preloads.iter() {
-                    // Read the wasm module binary either as `*.wat` or a raw binary
-                    let preload_target = self.run.load_module(&engine, path)?;
-                    let preload_module = match preload_target {
-                        RunTarget::Core(m) => m,
-                        #[cfg(feature = "component-model")]
-                        RunTarget::Component(_) => {
-                            bail!("components cannot be loaded with `--preload`")
-                        }
-                    };
-                    profiled_modules.push((name.to_string(), preload_module.clone()));
-
-                    // Add the module's functions to the linker.
-                    match &mut linker {
-                        #[cfg(feature = "cranelift")]
-                        CliLinker::Core(linker) => {
-                            linker
-                                .module_async(&mut store, name, &preload_module)
-                                .await
-                                .context(format!(
-                                    "failed to process preload `{}` at `{}`",
-                                    name,
-                                    path.display()
-                                ))?;
-                        }
-                        #[cfg(not(feature = "cranelift"))]
-                        CliLinker::Core(_) => {
-                            bail!("support for --preload disabled at compile time");
-                        }
-                        #[cfg(feature = "component-model")]
-                        CliLinker::Component(_) => {
-                            bail!("--preload cannot be used with components");
+                let result_replay_run: Result<Result<OkReplayT, ErrReplayT>, Elapsed> = runtime
+                    .block_on(async {
+                        tokio::time::timeout(dur, async {
+                            let res = replay_instance.run_to_completion_async().await;
+                            match res {
+                                Ok(_) => Ok(OkReplayT(replay_instance.extract_store())),
+                                Err(e) => Err(ErrReplayT(e, replay_instance.extract_store())),
+                            }
+                        })
+                        .await
+                    });
+                match result_replay_run {
+                    Ok(Ok(OkReplayT(s))) => {
+                        store = s;
+                        Ok(Ok(()))
+                    }
+                    Ok(Err(ErrReplayT(e, s))) => {
+                        store = s;
+                        Ok(Err(e))
+                    }
+                    Err(elapsed) => {
+                        eprintln!(
+                            "Error: {:?}",
+                            Err::<(), Error>(anyhow::Error::from(wasmtime::Trap::Interrupt))
+                                .with_context(|| format!("timed out after {elapsed}"))
+                        );
+                        cfg_if::cfg_if! {
+                            if #[cfg(unix)] {
+                                std::process::exit(rustix::process::EXIT_SIGNALED_SIGABRT);
+                            } else if #[cfg(windows)] {
+                                // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/abort?view=vs-2019
+                                std::process::exit(3);
+                            }
                         }
                     }
                 }
+            }
+            #[cfg(not(feature = "rr"))]
+            {
+                unreachable!("should be unreachable when `rr` feature is disabled");
+            }
+        } else {
+            runtime.block_on(async {
+                tokio::time::timeout(dur, async {
+                    let mut profiled_modules: Vec<(String, Module)> = Vec::new();
+                    if let RunTarget::Core(m) = &main {
+                        profiled_modules.push(("".to_string(), m.clone()));
+                    }
 
-                self.load_main_module(&mut store, &mut linker, &main, profiled_modules)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to run main module `{}`",
-                            self.module_and_args[0].to_string_lossy()
-                        )
-                    })
+                    // Load the preload wasm modules.
+                    for (name, path) in self.preloads.iter() {
+                        // Read the wasm module binary either as `*.wat` or a raw binary
+                        let preload_target = self.run.load_module(&engine, path)?;
+                        let preload_module = match preload_target {
+                            RunTarget::Core(m) => m,
+                            #[cfg(feature = "component-model")]
+                            RunTarget::Component(_) => {
+                                bail!("components cannot be loaded with `--preload`")
+                            }
+                        };
+                        profiled_modules.push((name.to_string(), preload_module.clone()));
+
+                        // Add the module's functions to the linker.
+                        match &mut linker {
+                            #[cfg(feature = "cranelift")]
+                            CliLinker::Core(linker) => {
+                                linker
+                                    .module_async(&mut store, name, &preload_module)
+                                    .await
+                                    .context(format!(
+                                        "failed to process preload `{}` at `{}`",
+                                        name,
+                                        path.display()
+                                    ))?;
+                            }
+                            #[cfg(not(feature = "cranelift"))]
+                            CliLinker::Core(_) => {
+                                bail!("support for --preload disabled at compile time");
+                            }
+                            #[cfg(feature = "component-model")]
+                            CliLinker::Component(_) => {
+                                bail!("--preload cannot be used with components");
+                            }
+                        }
+                    }
+
+                    self.load_main_module(&mut store, &mut linker, &main, profiled_modules)
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to run main module `{}`",
+                                self.module_and_args[0].to_string_lossy()
+                            )
+                        })
+                })
+                .await
             })
-            .await
-        });
+        };
 
         // Load the main wasm module.
         match result.unwrap_or_else(|elapsed| {
