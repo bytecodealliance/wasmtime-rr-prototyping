@@ -418,7 +418,7 @@ typedef union wasmtime_val_raw {
 // Assert that the shape of this type is as expected since it needs to match
 // Rust.
 static inline void __wasmtime_val_assertions() {
-  static_assert(sizeof(wasmtime_valunion_t) == 32, "should be 16-bytes large");
+  static_assert(sizeof(wasmtime_valunion_t) == 24, "should be 24-bytes large");
   static_assert(__alignof(wasmtime_valunion_t) == 8,
                 "should be 8-byte aligned");
   static_assert(sizeof(wasmtime_val_raw_t) == 16, "should be 16 bytes large");

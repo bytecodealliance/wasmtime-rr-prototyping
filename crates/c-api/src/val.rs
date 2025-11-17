@@ -152,7 +152,7 @@ pub union wasmtime_val_union {
 }
 
 const _: () = {
-    assert!(std::mem::size_of::<wasmtime_val_union>() == 32);
+    assert!(std::mem::size_of::<wasmtime_val_union>() == 24);
     assert!(std::mem::align_of::<wasmtime_val_union>() == std::mem::align_of::<u64>());
 };
 

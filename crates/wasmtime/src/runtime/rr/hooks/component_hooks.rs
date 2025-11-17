@@ -2,9 +2,7 @@ use crate::ValRaw;
 #[cfg(feature = "component-model")]
 use crate::component::func::LowerContext;
 #[cfg(feature = "rr-component")]
-use crate::rr::common_events::WasmFuncReturnEvent;
-#[cfg(feature = "rr-component")]
-use crate::rr::component_events::HostFuncEntryEvent;
+use crate::rr::common_events::{HostFuncEntryEvent, WasmFuncReturnEvent};
 #[cfg(feature = "rr-component")]
 use crate::rr::component_events::{
     LowerFlatReturnEvent, LowerMemoryReturnEvent, WasmFuncEntryEvent,

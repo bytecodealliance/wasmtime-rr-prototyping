@@ -1,8 +1,8 @@
 use crate::rr::FlatBytes;
 #[cfg(feature = "rr")]
 use crate::rr::{
-    RRFuncArgVals, ResultEvent, common_events::HostFuncReturnEvent,
-    common_events::WasmFuncReturnEvent, core_events::HostFuncEntryEvent,
+    RRFuncArgVals, ResultEvent, common_events::HostFuncEntryEvent,
+    common_events::HostFuncReturnEvent, common_events::WasmFuncReturnEvent,
     core_events::WasmFuncEntryEvent,
 };
 use crate::store::StoreOpaque;

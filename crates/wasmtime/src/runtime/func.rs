@@ -18,7 +18,9 @@ use core::future::Future;
 use core::mem::{self, MaybeUninit};
 use core::ptr::NonNull;
 use serde::{Deserialize, Serialize};
-use wasmtime_environ::{FuncIndex, VMSharedTypeIndex};
+use wasmtime_environ::{
+    FuncIndex, VMSharedTypeIndex, packed_option::PackedOption, packed_option::ReservedValue,
+};
 
 /// A reference to the abstract `nofunc` heap value.
 ///
@@ -110,6 +112,19 @@ pub struct WasmFuncOrigin {
     pub instance: InstanceId,
     /// The function index within the module.
     pub index: FuncIndex,
+}
+
+impl ReservedValue for WasmFuncOrigin {
+    fn reserved_value() -> Self {
+        WasmFuncOrigin {
+            instance: InstanceId::reserved_value(),
+            index: FuncIndex::reserved_value(),
+        }
+    }
+
+    fn is_reserved_value(&self) -> bool {
+        self.instance.is_reserved_value() && self.index.is_reserved_value()
+    }
 }
 
 /// A WebAssembly function which can be called.
@@ -294,14 +309,14 @@ pub struct Func {
     /// This field is populated when a [`Func`] is generated from a known instance
     /// (i.e. exported Wasm functions), and is usually `None` for internal
     /// Wasm functions and host functions.
-    origin: Option<WasmFuncOrigin>,
+    origin: PackedOption<WasmFuncOrigin>,
 }
 
 // Double-check that the C representation in `extern.h` matches our in-Rust
 // representation here in terms of size/alignment/etc.
 const _: () = {
     #[repr(C)]
-    struct C(u64, *mut u8, (u32, u32, u32));
+    struct C(u64, *mut u8, (u32, u32));
     assert!(core::mem::size_of::<C>() == core::mem::size_of::<Func>());
     assert!(core::mem::align_of::<C>() == core::mem::align_of::<Func>());
     assert!(core::mem::offset_of!(Func, store) == 0);
@@ -566,7 +581,7 @@ impl Func {
         Func {
             store,
             unsafe_func_ref: func_ref.into(),
-            origin: None,
+            origin: PackedOption::default(),
         }
     }
 
@@ -1035,7 +1050,7 @@ impl Func {
             },
             unsafe { params_and_returns.as_ref() },
             &self.ty(&store),
-            self.origin.clone(),
+            self.origin.expand(),
             &mut store,
         )
     }
@@ -1536,12 +1551,12 @@ impl Func {
 
     /// Set the origin of this function.
     pub(crate) fn set_origin(&mut self, origin: WasmFuncOrigin) {
-        self.origin = Some(origin);
+        self.origin = PackedOption::from(origin);
     }
 
     // Get the origin of this function
     pub(crate) fn origin(&self) -> Option<WasmFuncOrigin> {
-        self.origin
+        self.origin.expand()
     }
 }
 

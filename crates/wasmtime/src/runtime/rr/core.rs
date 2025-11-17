@@ -124,6 +124,8 @@ rr_event! {
     /// Return from host function (core or component) to host
     HostFuncReturn(common_events::HostFuncReturnEvent),
     // OPTIONAL events
+    /// Call into host function from Wasm (core or component)
+    HostFuncEntry(common_events::HostFuncEntryEvent),
     /// Return from Wasm function (core or component) to host
     WasmFuncReturn(common_events::WasmFuncReturnEvent),
 
@@ -132,8 +134,6 @@ rr_event! {
     CoreWasmInstantiation(core_events::InstantiationEvent),
     /// Entry from host into a core Wasm function
     CoreWasmFuncEntry(core_events::WasmFuncEntryEvent),
-    /// Call into host function from core Wasm
-    CoreHostFuncEntry(core_events::HostFuncEntryEvent),
 
     // REQUIRED events for replay (Component)
 
@@ -165,8 +165,6 @@ rr_event! {
     /// Any error is subsumed by the containing LowerReturn/LowerStoreReturn
     /// that triggered realloc
     ComponentReallocReturn(__component_events::ReallocReturnEvent),
-    /// Call into host function from component
-    ComponentHostFuncEntry(__component_events::HostFuncEntryEvent),
     /// Call into type lowering for flat destination
     ComponentLowerFlatEntry(__component_events::LowerFlatEntryEvent),
     /// Call into type lowering for memory destination
@@ -581,32 +579,29 @@ impl Replayer for ReplayBuffer {
 mod tests {
     use super::*;
     use crate::ValRaw;
-    use core::mem::MaybeUninit;
+    use crate::WasmFuncOrigin;
+    use crate::store::InstanceId;
+    use crate::vm::component::libcalls::ResourceDropRet;
     use std::fs::File;
     use std::path::Path;
     use tempfile::{NamedTempFile, TempPath};
+    use wasmtime_environ::FuncIndex;
 
-    #[test]
-    #[cfg(all(feature = "rr", feature = "rr-component"))]
-    fn rr_buffers() -> Result<()> {
-        use wasmtime_environ::component::FlatTypesStorage;
-
+    fn rr_harness<S, T>(record_fn: S, replay_fn: T) -> Result<()>
+    where
+        S: FnOnce(&mut RecordBuffer) -> Result<()>,
+        T: FnOnce(&mut ReplayBuffer) -> Result<()>,
+    {
+        // Record information
         let record_settings = RecordSettings::default();
         let tmp = NamedTempFile::new()?;
         let tmppath = tmp.path().to_str().expect("Filename should be UTF-8");
 
-        let values = vec![ValRaw::i32(1), ValRaw::f32(2), ValRaw::i64(3)];
-        let flat = FlatTypesStorage::new();
-        flat.push(FlatType::I32, FlatType::I32);
-        flat.push(FlatType::F32, FlatType::F32);
-        flat.push(FlatType::I64, FlatType::I64);
-
         // Record values
         let mut recorder =
             RecordBuffer::new_recorder(Box::new(File::create(tmppath)?), record_settings)?;
-        recorder.record_event(|| {
-            __component_events::HostFuncReturnEvent::new(values.as_slice(), flat)
-        })?;
+
+        record_fn(&mut recorder)?;
         recorder.flush()?;
 
         let tmp = tmp.into_temp_path();
@@ -618,22 +613,408 @@ mod tests {
         // Assert that replayed values are identical
         let mut replayer =
             ReplayBuffer::new_replayer(Box::new(File::open(tmppath)?), replay_settings)?;
-        let mut result_values = values.clone();
-        replayer.next_event_and(|event: __component_events::HostFuncReturnEvent| {
-            event.move_into_slice(result_values.as_mut_slice());
 
-            // Check replay `values` matches record `values`
-            for (a, b) in values.iter().zip(result_values.iter()) {
-                unsafe {
-                    assert!(a.assume_init().as_bytes() == b.assume_init().as_bytes());
-                }
-            }
-            Ok(())
-        })?;
+        replay_fn(&mut replayer)?;
 
         // Check queue is empty
         assert!(replayer.next().is_none());
-
         Ok(())
+    }
+
+    fn verify_equal_slices(
+        record_vals: &[ValRaw],
+        replay_vals: &[ValRaw],
+        flat_sizes: &[u8],
+    ) -> Result<()> {
+        for ((a, b), sz) in record_vals
+            .iter()
+            .zip(replay_vals.iter())
+            .zip(flat_sizes.iter())
+        {
+            let a_slice: &[u8] = &a.get_bytes()[..*sz as usize];
+            let b_slice: &[u8] = &b.get_bytes()[..*sz as usize];
+            assert!(
+                a_slice == b_slice,
+                "Recorded values {:?} and replayed values {:?} do not match",
+                a_slice,
+                b_slice
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn host_func() -> Result<()> {
+        let values = vec![ValRaw::f64(20), ValRaw::i32(10), ValRaw::i64(30)];
+        let flat_sizes: Vec<u8> = vec![8, 4, 8];
+
+        let return_values = vec![ValRaw::i32(1), ValRaw::f32(2), ValRaw::i64(3)];
+        let return_flat_sizes: Vec<u8> = vec![4, 4, 8];
+        let mut return_replay_values = values.clone();
+
+        rr_harness(
+            |recorder| {
+                recorder.record_event(|| common_events::HostFuncEntryEvent {
+                    args: RRFuncArgVals::from_flat_iter(&values, flat_sizes.iter().copied()),
+                })?;
+                recorder.record_event(|| common_events::HostFuncReturnEvent {
+                    args: RRFuncArgVals::from_flat_iter(
+                        &return_values,
+                        return_flat_sizes.iter().copied(),
+                    ),
+                })
+            },
+            |replayer| {
+                replayer.next_event_and(|event: common_events::HostFuncEntryEvent| {
+                    event.validate(&common_events::HostFuncEntryEvent {
+                        args: RRFuncArgVals::from_flat_iter(&values, flat_sizes.iter().copied()),
+                    })
+                })?;
+                replayer.next_event_and(|event: common_events::HostFuncReturnEvent| {
+                    event.args.into_raw_slice(&mut return_replay_values);
+                    Ok(())
+                })?;
+                verify_equal_slices(&return_values, &return_replay_values, &return_flat_sizes)
+            },
+        )
+    }
+
+    #[test]
+    fn wasm_func_entry() -> Result<()> {
+        let values = vec![ValRaw::i32(42), ValRaw::f64(314), ValRaw::i64(84)];
+        let flat_sizes: Vec<u8> = vec![4, 8, 8];
+        let origin = WasmFuncOrigin {
+            instance: InstanceId::from_u32(15),
+            index: FuncIndex::from_u32(7),
+        };
+        let mut replay_values = values.clone();
+        let mut replay_origin = None;
+
+        let return_values = vec![ValRaw::f32(7), ValRaw::f32(8), ValRaw::v128(21)];
+        let return_flat_sizes: Vec<u8> = vec![4, 4, 16];
+        let mut return_replay_values = values.clone();
+
+        rr_harness(
+            |recorder| {
+                recorder.record_event(|| core_events::WasmFuncEntryEvent {
+                    origin: origin.clone(),
+                    args: RRFuncArgVals::from_flat_iter(&values, flat_sizes.iter().copied()),
+                })?;
+                recorder.record_event(|| __component_events::WasmFuncEntryEvent {
+                    args: RRFuncArgVals::from_flat_iter(
+                        &return_values,
+                        return_flat_sizes.iter().copied(),
+                    ),
+                })
+            },
+            |replayer| {
+                replayer.next_event_and(|event: core_events::WasmFuncEntryEvent| {
+                    replay_origin = Some(event.origin);
+                    event.args.into_raw_slice(&mut replay_values);
+                    Ok(())
+                })?;
+                assert!(origin == replay_origin.unwrap());
+                verify_equal_slices(&values, &replay_values, &flat_sizes)?;
+
+                replayer.next_event_and(|event: __component_events::WasmFuncEntryEvent| {
+                    event.args.into_raw_slice(&mut return_replay_values);
+                    Ok(())
+                })?;
+                verify_equal_slices(&return_values, &return_replay_values, &return_flat_sizes)
+            },
+        )
+    }
+
+    #[test]
+    fn builtin_event_entry() -> Result<()> {
+        use __component_events::{
+            BuiltinEntryEvent, ResourceDropEntryEvent, ResourceEnterCallEntryEvent,
+            ResourceExitCallEntryEvent, ResourceTransferBorrowEntryEvent,
+            ResourceTransferOwnEntryEvent,
+        };
+        let events: Vec<BuiltinEntryEvent> = vec![
+            BuiltinEntryEvent::ResourceDrop(ResourceDropEntryEvent {
+                resource: 42,
+                idx: 10,
+            }),
+            BuiltinEntryEvent::ResourceTransferOwn(ResourceTransferOwnEntryEvent {
+                src_idx: 5,
+                src_table: 1,
+                dst_table: 2,
+            }),
+            BuiltinEntryEvent::ResourceTransferBorrow(ResourceTransferBorrowEntryEvent {
+                src_idx: 7,
+                src_table: 3,
+                dst_table: 4,
+            }),
+            BuiltinEntryEvent::ResourceEnterCall(ResourceEnterCallEntryEvent {}),
+            BuiltinEntryEvent::ResourceExitCall(ResourceExitCallEntryEvent {}),
+        ];
+
+        rr_harness(
+            |recorder| {
+                for event in &events {
+                    recorder.record_event(|| event.clone())?;
+                }
+                Ok(())
+            },
+            |replayer| {
+                for event in &events {
+                    replayer.next_event_and(|replay_event: BuiltinEntryEvent| {
+                        assert!(*event == replay_event);
+                        Ok(())
+                    })?;
+                }
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn builtin_event_return() -> Result<()> {
+        use __component_events::{
+            BuiltinError, BuiltinReturnEvent, ResourceDropReturnEvent, ResourceExitCallReturnEvent,
+            ResourceRep32ReturnEvent, ResourceTransferBorrowReturnEvent,
+            ResourceTransferOwnReturnEvent,
+        };
+        let events: Vec<BuiltinReturnEvent> = vec![
+            BuiltinReturnEvent::ResourceDrop(ResourceDropReturnEvent(
+                ResultEvent::from_anyhow_result(&Ok(ResourceDropRet::default())),
+            )),
+            BuiltinReturnEvent::ResourceRep32(ResourceRep32ReturnEvent(
+                ResultEvent::from_anyhow_result(&Ok(123)),
+            )),
+            BuiltinReturnEvent::ResourceTransferOwn(ResourceTransferOwnReturnEvent(
+                ResultEvent::from_anyhow_result(&Ok(42)),
+            )),
+            BuiltinReturnEvent::ResourceTransferBorrow(ResourceTransferBorrowReturnEvent(
+                ResultEvent::from_anyhow_result(&Ok(17)),
+            )),
+            BuiltinReturnEvent::ResourceExitCall(ResourceExitCallReturnEvent(
+                ResultEvent::from_anyhow_result(&Err(anyhow::anyhow!("Exit call failed!"))),
+            )),
+        ];
+
+        rr_harness(
+            |recorder| {
+                for event in &events {
+                    recorder.record_event(|| event.clone())?;
+                }
+                Ok(())
+            },
+            |replayer| {
+                for event in &events {
+                    replayer.next_event_and(|replay_event: BuiltinReturnEvent| {
+                        match (replay_event, event) {
+                            (
+                                BuiltinReturnEvent::ResourceDrop(e),
+                                BuiltinReturnEvent::ResourceDrop(expected),
+                            ) => {
+                                assert_eq!(e.ret().unwrap(), expected.clone().ret().unwrap());
+                            }
+                            (
+                                BuiltinReturnEvent::ResourceRep32(e),
+                                BuiltinReturnEvent::ResourceRep32(expected),
+                            ) => {
+                                assert_eq!(e.ret().unwrap(), expected.clone().ret().unwrap());
+                            }
+                            (
+                                BuiltinReturnEvent::ResourceTransferOwn(e),
+                                BuiltinReturnEvent::ResourceTransferOwn(expected),
+                            ) => {
+                                assert_eq!(e.ret().unwrap(), expected.clone().ret().unwrap());
+                            }
+                            (
+                                BuiltinReturnEvent::ResourceTransferBorrow(e),
+                                BuiltinReturnEvent::ResourceTransferBorrow(expected),
+                            ) => {
+                                assert_eq!(e.ret().unwrap(), expected.clone().ret().unwrap());
+                            }
+                            (
+                                BuiltinReturnEvent::ResourceExitCall(e),
+                                BuiltinReturnEvent::ResourceExitCall(expected),
+                            ) => {
+                                assert_eq!(
+                                    e.ret()
+                                        .unwrap_err()
+                                        .downcast_ref::<BuiltinError>()
+                                        .unwrap()
+                                        .get(),
+                                    expected
+                                        .clone()
+                                        .ret()
+                                        .unwrap_err()
+                                        .downcast_ref::<BuiltinError>()
+                                        .unwrap()
+                                        .get()
+                                );
+                            }
+                            _ => unreachable!(),
+                        };
+                        Ok(())
+                    })?;
+                }
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn lower_flat_events() -> Result<()> {
+        use __component_events::{LowerFlatEntryEvent, LowerFlatReturnEvent};
+        use wasmtime_environ::component::InterfaceType;
+
+        let entry = LowerFlatEntryEvent {
+            ty: InterfaceType::U32,
+        };
+        let return_event = LowerFlatReturnEvent(ResultEvent::from_anyhow_result(&Ok(())));
+
+        rr_harness(
+            |recorder| {
+                recorder.record_event(|| entry.clone())?;
+                recorder.record_event(|| return_event.clone())?;
+                Ok(())
+            },
+            |replayer| {
+                replayer.next_event_and(|e: LowerFlatEntryEvent| {
+                    assert_eq!(e.ty, InterfaceType::U32);
+                    Ok(())
+                })?;
+                replayer.next_event_and(|e: LowerFlatReturnEvent| {
+                    assert!(e.0.ret().is_ok());
+                    Ok(())
+                })?;
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn lower_memory_events() -> Result<()> {
+        use __component_events::{LowerMemoryEntryEvent, LowerMemoryReturnEvent};
+        use wasmtime_environ::component::InterfaceType;
+
+        let entry = LowerMemoryEntryEvent {
+            ty: InterfaceType::String,
+            offset: 1024,
+        };
+        let return_event = LowerMemoryReturnEvent(ResultEvent::from_anyhow_result(&Ok(())));
+
+        rr_harness(
+            |recorder| {
+                recorder.record_event(|| entry.clone())?;
+                recorder.record_event(|| return_event.clone())?;
+                Ok(())
+            },
+            |replayer| {
+                replayer.next_event_and(|e: LowerMemoryEntryEvent| {
+                    assert_eq!(e.ty, InterfaceType::String);
+                    assert_eq!(e.offset, 1024);
+                    Ok(())
+                })?;
+                replayer.next_event_and(|e: LowerMemoryReturnEvent| {
+                    assert!(e.0.ret().is_ok());
+                    Ok(())
+                })?;
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn realloc_events() -> Result<()> {
+        use __component_events::{ReallocEntryEvent, ReallocReturnEvent};
+
+        let entry = ReallocEntryEvent {
+            old_addr: 0x1000,
+            old_size: 64,
+            old_align: 8,
+            new_size: 128,
+        };
+        let return_event = ReallocReturnEvent(ResultEvent::from_anyhow_result(&Ok(0x2000)));
+
+        rr_harness(
+            |recorder| {
+                recorder.record_event(|| entry.clone())?;
+                recorder.record_event(|| return_event.clone())?;
+                Ok(())
+            },
+            |replayer| {
+                replayer.next_event_and(|e: ReallocEntryEvent| {
+                    assert_eq!(e.old_addr, 0x1000);
+                    assert_eq!(e.old_size, 64);
+                    assert_eq!(e.old_align, 8);
+                    assert_eq!(e.new_size, 128);
+                    Ok(())
+                })?;
+                replayer.next_event_and(|e: ReallocReturnEvent| {
+                    assert_eq!(e.0.ret().unwrap(), 0x2000);
+                    Ok(())
+                })?;
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn memory_slice_write_event() -> Result<()> {
+        use __component_events::MemorySliceWriteEvent;
+
+        let event = MemorySliceWriteEvent {
+            offset: 512,
+            bytes: vec![0x01, 0x02, 0x03, 0x04, 0xFF],
+        };
+
+        rr_harness(
+            |recorder| {
+                recorder.record_event(|| event.clone())?;
+                Ok(())
+            },
+            |replayer| {
+                replayer.next_event_and(|e: MemorySliceWriteEvent| {
+                    assert_eq!(e.offset, 512);
+                    assert_eq!(e.bytes, vec![0x01, 0x02, 0x03, 0x04, 0xFF]);
+                    Ok(())
+                })?;
+                Ok(())
+            },
+        )
+    }
+
+    #[test]
+    fn instantiation_event() -> Result<()> {
+        use crate::component::ComponentInstanceId;
+        use crate::store::InstanceId;
+        use __component_events::InstantiationEvent as ComponentInstantiationEvent;
+        use core_events::InstantiationEvent as CoreInstantiationEvent;
+
+        let component_event = ComponentInstantiationEvent {
+            component: [0xAB; 32],
+            instance: ComponentInstanceId::from_u32(42),
+        };
+
+        let core_event = CoreInstantiationEvent {
+            module: [0xCD; 32],
+            instance: InstanceId::from_u32(17),
+        };
+
+        rr_harness(
+            |recorder| {
+                recorder.record_event(|| component_event.clone())?;
+                recorder.record_event(|| core_event.clone())?;
+                Ok(())
+            },
+            |replayer| {
+                replayer.next_event_and(|e: ComponentInstantiationEvent| {
+                    e.validate(&component_event)?;
+                    Ok(())
+                })?;
+                replayer.next_event_and(|e: CoreInstantiationEvent| {
+                    e.validate(&core_event)?;
+                    Ok(())
+                })?;
+                Ok(())
+            },
+        )
     }
 }

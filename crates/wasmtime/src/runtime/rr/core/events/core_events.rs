@@ -19,10 +19,3 @@ pub struct WasmFuncEntryEvent {
     /// Raw values passed across call boundary
     pub args: RRFuncArgVals,
 }
-
-/// A call event from a Core Wasm module into the host
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct HostFuncEntryEvent {
-    /// Raw values passed across the call/return boundary
-    pub args: RRFuncArgVals,
-}

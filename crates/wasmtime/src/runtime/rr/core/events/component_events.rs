@@ -33,13 +33,6 @@ pub struct WasmFuncEntryEvent {
     pub args: RRFuncArgVals,
 }
 
-/// A call event from a Wasm component into the host
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct HostFuncEntryEvent {
-    /// Raw values passed across the call entry boundary
-    pub args: RRFuncArgVals,
-}
-
 /// A reallocation call event in the Component Model canonical ABI
 ///
 /// Usually performed during lowering of complex [`ComponentType`]s to Wasm

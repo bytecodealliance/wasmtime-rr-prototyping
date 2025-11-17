@@ -30,7 +30,8 @@ impl FlatBytes for MaybeUninit<ValRaw> {
     #[inline]
     fn bytes_ref(&self, size: u8) -> &[u8] {
         // Uninitialized data is assumed and serialized, so hence
-        // may contain some undefined values
+        // may contain some undefined values. But these are irrelevant
+        // when serializing to `RRFuncArgVals`
         let val = unsafe { self.assume_init_ref() };
         val.bytes_ref(size)
     }

@@ -651,8 +651,8 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                 //
                 // Realloc or any lowering methods cannot call back to the host. Hence, you cannot
                 // have host calls entries during this method
-                RREvent::ComponentHostFuncEntry(_) => {
-                    bail!("Cannot call into host during lowering")
+                RREvent::HostFuncEntry(_) => {
+                    bail!("Cannot call back into host during lowering")
                 }
                 // Unwrapping should never occur on valid executions since *Entry should be before *Return in trace
                 RREvent::ComponentReallocReturn(e) => {

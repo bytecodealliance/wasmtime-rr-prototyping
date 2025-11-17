@@ -658,7 +658,7 @@ fn resource_drop(
     ))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ResourceDropRet(Option<u32>);
 
 unsafe impl HostResultHasUnwindSentinel for ResourceDropRet {

@@ -6,10 +6,18 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
+/// A call event from Wasm (core or component) into the host
+///
+/// Matches with [`HostFuncReturnEvent`]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HostFuncEntryEvent {
+    /// Raw values passed across the call/return boundary
+    pub args: RRFuncArgVals,
+}
+
 /// A return event after a host call to Wasm (core or component)
 ///
-/// Matches with either [`component_events::HostFuncEntryEvent`] or
-/// [`core_events::HostFuncEntryEvent`]
+/// Matches with [`HostFuncEntryEvent`]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostFuncReturnEvent {
     /// Raw values passed across the call/return boundary

@@ -1613,7 +1613,6 @@ impl ValRaw {
     #[inline]
     pub fn get_bytes(&self) -> &[u8; mem::size_of::<Self>()] {
         unsafe { &self.bytes }
-        //unsafe { &*(self as *const Self as *const [u8; mem::size_of::<Self>()]) }
     }
 
     /// Create a WebAssembly value from raw bytes
