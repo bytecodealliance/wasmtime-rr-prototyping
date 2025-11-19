@@ -900,6 +900,27 @@ impl<T> Store<T> {
         }
     }
 
+    /// Consumes this [`Store`], destroying it and obtain
+    /// the [`RecordWriter`] initialized for recording.
+    ///
+    /// ## Notes
+    ///
+    /// The [`RecordWriter`] is never internally updated besides
+    /// with the `init_recording` API
+    #[cfg(feature = "rr")]
+    pub fn into_record_writer(mut self) -> Result<Box<dyn RecordWriter>> {
+        // See [`Store::into_data`] and the `Drop` implementation of
+        // `Store` for documentation on this operation
+        self.run_manual_drop_routines();
+
+        unsafe {
+            let mut inner = ManuallyDrop::take(&mut self.inner);
+            core::mem::forget(self);
+            ManuallyDrop::drop(&mut inner.data_no_provenance);
+            inner.inner.into_record_writer()
+        }
+    }
+
     /// Configures the [`ResourceLimiter`] used to limit resource creation
     /// within this [`Store`].
     ///
@@ -1318,13 +1339,13 @@ impl<T> Store<T> {
 
     /// Configure a [`Store`] to enable execution recording
     ///
-    /// This feature must be initialized before instantiating any module within
+    /// This must be initialized before instantiating any module within
     /// the Store. Recording of events is performed according to provided settings, and
     /// written to the provided writer.
     #[cfg(feature = "rr")]
     pub fn init_recording(
         &mut self,
-        recorder: impl RecordWriter + 'static,
+        recorder: impl RecordWriter,
         settings: RecordSettings,
     ) -> Result<()> {
         self.inner.init_recording(recorder, settings)
@@ -1332,7 +1353,7 @@ impl<T> Store<T> {
 
     /// Configure a [`Store`] to enable execution replaying
     ///
-    /// This feature must be initialized before instantiating any module within
+    /// This must be initialized before instantiating any module within
     /// the Store. Replay of events is performed according to provided settings, and
     /// read from the provided reader.
     #[cfg(feature = "rr")]
@@ -1856,7 +1877,7 @@ impl StoreOpaque {
     #[cfg(feature = "rr")]
     pub fn init_recording(
         &mut self,
-        recorder: impl RecordWriter + 'static,
+        recorder: impl RecordWriter,
         settings: RecordSettings,
     ) -> Result<()> {
         ensure!(
@@ -1869,6 +1890,14 @@ impl StoreOpaque {
         );
         self.record_buffer = Some(RecordBuffer::new_recorder(recorder, settings)?);
         Ok(())
+    }
+
+    #[cfg(feature = "rr")]
+    pub fn into_record_writer(mut self) -> Result<Box<dyn RecordWriter>> {
+        self.record_buffer
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("record buffer in store was not initialized"))?
+            .into_writer()
     }
 
     #[cfg(feature = "rr")]
@@ -3035,6 +3064,12 @@ impl Drop for StoreOpaque {
                     allocator.decrement_component_instance_count();
                 }
             }
+        }
+
+        // Flush any remaining recording data
+        #[cfg(feature = "rr")]
+        if let Some(buf) = self.record_buffer_mut() {
+            buf.finish().unwrap();
         }
     }
 }

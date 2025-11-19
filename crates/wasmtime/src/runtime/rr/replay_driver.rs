@@ -74,22 +74,62 @@ impl ReplayEnvironment {
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```
 /// use wasmtime::*;
 /// use wasmtime::component::Component;
+/// # use std::io::Cursor;
+/// # use wasmtime::component;
+/// # use core::any::Any;
+/// # fn main() -> Result<()> {
+/// let component_str: &str = r#"
+///     (component
+///         (core module $m
+///             (func (export "main") (result i32)
+///                 i32.const 42
+///             )
+///         )
+///         (core instance $i (instantiate $m))
 ///
-/// fn main() -> Result<()> {
-///     let config = Config::new();
-///     config.rr(RRConfig::Recording);
-///     let engine = Engine::new(&config)?;
-///     let mut renv = ReplayEnvironment::new(&engine, ReplaySettings::default());
-///     renv.add_component(Component::from_file(&engine, /* path to component file */)?);
-///     // You can add more components, or modules with renv.add_module(module);
-///     // ....
-///     let mut instance = renv.instantiate(BufReader::new(/* path to trace file */))?;
-///     instance.run_to_completion()?;
-///     Ok(())
-/// }
+///         (func (export "main") (result u32)
+///             (canon lift (core func $i "main"))
+///         )
+///     )
+/// "#;
+///
+/// # let record_settings = RecordSettings::default();
+/// # let mut config = Config::new();
+/// # config.rr(RRConfig::Recording);
+///
+/// # let engine = Engine::new(&config)?;
+/// # let component = Component::new(&engine, component_str)?;
+/// # let mut linker = component::Linker::new(&engine);
+///
+/// # let writer: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+/// # let mut store = Store::new(&engine, ());
+/// # store.init_recording(writer, record_settings)?;
+///
+/// # let instance = linker.instantiate(&mut store, &component)?;
+/// # let func = instance.get_typed_func::<(), (u32,)>(&mut store, "main")?;
+/// # let _ = func.call(&mut store, ());
+///
+/// # let trace_box = store.into_record_writer()?;
+/// # let any_box: Box<dyn Any> = trace_box;
+/// # let mut trace_reader = any_box.downcast::<Cursor<Vec<u8>>>().unwrap();
+/// # trace_reader.set_position(0);
+///
+/// // let trace_reader = ... (obtain a ReplayReader over the recorded trace from somewhere)
+///
+/// let mut config = Config::new();
+/// config.rr(RRConfig::Replaying);
+/// let engine = Engine::new(&config)?;
+/// let mut renv = ReplayEnvironment::new(&engine, ReplaySettings::default());
+/// renv.add_component(Component::new(&engine, component_str)?);
+/// // You can add more components, or modules with renv.add_module(module);
+/// // ....
+/// let mut instance = renv.instantiate(trace_reader)?;
+/// instance.run_to_completion()?;
+/// # Ok(())
+/// # }
 /// ```
 pub struct ReplayInstance<T: 'static> {
     env: Arc<ReplayEnvironment>,

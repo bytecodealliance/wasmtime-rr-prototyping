@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use core::any::Any;
 use postcard;
 use serde::{Deserialize, Serialize};
 
@@ -10,8 +11,8 @@ cfg_if::cfg_if! {
         /// An [`Write`] usable for recording in RR
         ///
         /// This supports `no_std`, but must be [Send] and [Sync]
-        pub trait RecordWriter: Write + Send + Sync {}
-        impl<T: Write + Send + Sync> RecordWriter for T {}
+        pub trait RecordWriter: Write + Send + Sync + Any {}
+        impl<T: Write + Send + Sync + Any> RecordWriter for T {}
 
         /// An [`Read`] usable for replaying in RR
         pub trait ReplayReader: Read + Seek + Send + Sync {}
@@ -24,8 +25,8 @@ cfg_if::cfg_if! {
         /// An [`Write`] usable for recording in RR
         ///
         /// This supports `no_std`, but must be [Send] and [Sync]
-        pub trait RecordWriter: Write + Send + Sync {}
-        impl<T: Write + Send + Sync> RecordWriter for T {}
+        pub trait RecordWriter: Write + Send + Sync + Any {}
+        impl<T: Write + Send + Sync + Any> RecordWriter for T {}
 
         /// An [`Read`] usable for replaying in RR
         ///
@@ -38,7 +39,7 @@ cfg_if::cfg_if! {
 /// Serialize and write `value` to a `RecordWriter`
 ///
 /// Currently uses `postcard` serializer
-pub(super) fn to_record_writer<T, W>(value: &T, writer: W) -> Result<()>
+pub(super) fn to_record_writer<T, W>(value: &T, writer: &mut W) -> Result<()>
 where
     T: Serialize + ?Sized,
     W: RecordWriter,

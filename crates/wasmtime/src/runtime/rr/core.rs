@@ -269,7 +269,7 @@ impl<T: EventError> From<T> for ReplayError {
 /// This trait provides the interface for a FIFO recorder
 pub trait Recorder {
     /// Construct a recorder with the writer backend
-    fn new_recorder(writer: impl RecordWriter + 'static, settings: RecordSettings) -> Result<Self>
+    fn new_recorder(writer: impl RecordWriter, settings: RecordSettings) -> Result<Self>
     where
         Self: Sized;
 
@@ -282,6 +282,9 @@ pub trait Recorder {
     where
         T: Into<RREvent>,
         F: FnOnce() -> T;
+
+    /// Consumes this [`Recorder`] and returns its underlying writer
+    fn into_writer(self) -> Result<Box<dyn RecordWriter>>;
 
     /// Trigger an explicit flush of any buffered data to the writer
     ///
@@ -408,21 +411,17 @@ impl RecordBuffer {
         }
         Ok(())
     }
-}
 
-impl Drop for RecordBuffer {
-    fn drop(&mut self) {
+    /// End the trace and flush any remaining data
+    pub fn finish(&mut self) -> Result<()> {
         // Insert End of trace delimiter
-        self.push_event(RREvent::Eof).unwrap();
-        self.flush().unwrap();
+        self.push_event(RREvent::Eof)?;
+        self.flush()
     }
 }
 
 impl Recorder for RecordBuffer {
-    fn new_recorder(
-        mut writer: impl RecordWriter + 'static,
-        settings: RecordSettings,
-    ) -> Result<Self> {
+    fn new_recorder(mut writer: impl RecordWriter, settings: RecordSettings) -> Result<Self> {
         // Replay requires the Module version and record settings
         io::to_record_writer(ModuleVersionStrategy::WasmtimeVersion.as_str(), &mut writer)?;
         io::to_record_writer(&settings, &mut writer)?;
@@ -442,6 +441,12 @@ impl Recorder for RecordBuffer {
         let event = f().into();
         log::debug!("Recording event => {}", &event);
         self.push_event(event)
+    }
+
+    #[inline]
+    fn into_writer(mut self) -> Result<Box<dyn RecordWriter>> {
+        self.finish()?;
+        Ok(self.writer)
     }
 
     fn flush(&mut self) -> Result<()> {
@@ -603,7 +608,7 @@ mod tests {
             RecordBuffer::new_recorder(Box::new(File::create(tmppath)?), record_settings)?;
 
         record_fn(&mut recorder)?;
-        drop(recorder);
+        recorder.finish()?;
 
         let tmp = tmp.into_temp_path();
         let tmppath = <TempPath as AsRef<Path>>::as_ref(&tmp)
