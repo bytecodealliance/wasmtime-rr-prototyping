@@ -509,17 +509,17 @@ impl Iterator for ReplayBuffer {
 
 impl Drop for ReplayBuffer {
     fn drop(&mut self) {
-        let mut remaining_events = 0;
-        log::info!("Replay buffer is being dropped; checking for remaining replay events...");
+        let mut remaining = false;
+        log::debug!("Replay buffer is being dropped; checking for remaining replay events...");
         // Cannot use count() in iterator because IO error may loop indefinitely
         while let Some(e) = self.next() {
             e.unwrap();
-            remaining_events += 1;
+            remaining = true;
+            break;
         }
-        if remaining_events > 0 {
+        if remaining {
             log::warn!(
-                "{} events were not used in the replay buffer. This is likely the result of an erroneous/incomplete execution",
-                remaining_events
+                "Some events were not used in the replay buffer. This is likely the result of an erroneous/incomplete execution",
             );
         } else {
             log::debug!("All replay events were successfully processed.");

@@ -57,6 +57,9 @@ where
     let result = wasm_call(store);
     #[cfg(feature = "rr-component")]
     {
+        if let Err(e) = &result {
+            log::warn!("Wasm function call exited with error: {:?}", e);
+        }
         let flat_results = types.flat_types_storage_or_pointer(
             &InterfaceType::Tuple(types[type_idx].results),
             MAX_FLAT_RESULTS,

@@ -108,15 +108,6 @@ impl ReplayCommand {
             .timeout
             .unwrap_or(std::time::Duration::MAX);
 
-        //let result: Result<Result<OkReplayT, ErrReplayT>, Elapsed> =
-        //    tokio::time::timeout(dur, async {
-        //        let res = replay_instance.run_to_completion_async().await;
-        //        match res {
-        //            Ok(_) => Ok(OkReplayT(replay_instance.extract_store())),
-        //            Err(e) => Err(ErrReplayT(e, replay_instance.extract_store())),
-        //        }
-        //    })
-        //    .await;
         let result: Result<Result<()>, Elapsed> = tokio::time::timeout(dur, async {
             replay_instance.run_to_completion_async().await
         })

@@ -328,7 +328,7 @@ impl<T: 'static> ReplayInstance<T> {
             }
 
             _ => {
-                log::error!("Unexpected non-top-level RR event: {:?}", rr_event);
+                log::error!("Unexpected top-level RR event: {:?}", rr_event);
                 Err(ReplayError::IncorrectEventVariant)?
             }
         }
@@ -386,7 +386,7 @@ impl<T: 'static> ReplayInstance<T> {
 
                     // Replay lowering steps and obtain raw value arguments to raw function call
                     let func = component::Func::from_lifted_func(*instance, event.func_idx);
-                    let store = self.store.as_context_mut();
+                    let mut store = self.store.as_context_mut();
 
                     // Call the function
                     //
@@ -394,28 +394,40 @@ impl<T: 'static> ReplayInstance<T> {
                     let mut results_storage = [component::Val::U64(0); MAX_FLAT_RESULTS];
                     let mut num_results = 0;
                     let results = &mut results_storage;
-                    let _return = unsafe {
-                        async {
-                        func.call_raw(
-                                store,
-                                |cx, _, dst: &mut MaybeUninit<[MaybeUninit<ValRaw>; MAX_FLAT_PARAMS]>| {
-                                    // For lowering, use replay instead of actual lowering
-                                    let dst: &mut [MaybeUninit<ValRaw>] = dst.assume_init_mut();
-                                    cx.replay_lowering(Some(dst), component_hooks::ReplayLoweringPhase::WasmFuncEntry)
-                                },
-                                |cx, results_ty, src: &[ValRaw; MAX_FLAT_RESULTS]| {
-                                    // Lifting can proceed exactly as normal
-                                    for (result, slot) in
-                                        component::Func::lift_results(cx, results_ty, src, MAX_FLAT_RESULTS)?.zip(results)
-                                    {
-                                        *slot = result?;
-                                        num_results += 1;
-                                    }
-                                    Ok(())
-                                },
+                    let _return = store
+                        .on_fiber(|store| unsafe {
+                            func.call_raw(
+                                store.as_context_mut(),
+                                    |cx,
+                                     _,
+                                     dst: &mut MaybeUninit<
+                                        [MaybeUninit<ValRaw>; MAX_FLAT_PARAMS],
+                                    >| {
+                                        // For lowering, use replay instead of actual lowering
+                                        let dst: &mut [MaybeUninit<ValRaw>] = dst.assume_init_mut();
+                                        cx.replay_lowering(
+                                            Some(dst),
+                                            component_hooks::ReplayLoweringPhase::WasmFuncEntry,
+                                        )
+                                    },
+                                    |cx, results_ty, src: &[ValRaw; MAX_FLAT_RESULTS]| {
+                                        // Lifting can proceed exactly as normal
+                                        for (result, slot) in component::Func::lift_results(
+                                            cx,
+                                            results_ty,
+                                            src,
+                                            MAX_FLAT_RESULTS,
+                                        )?
+                                        .zip(results)
+                                        {
+                                            *slot = result?;
+                                            num_results += 1;
+                                        }
+                                        Ok(())
+                                    },
                             )
-                        }.await?;
-                    };
+                        })
+                        .await??;
 
                     log::info!(
                         "Returned {:?} for calling {:?}",
@@ -476,20 +488,16 @@ impl<T: 'static> ReplayInstance<T> {
                 //
                 // This is almost a mirror of the usage in [`crate::Func::call_impl`]
                 func.call_impl_check_args(&mut store, &params, &mut results)?;
-                unsafe {
-                    async {
-                        func.call_impl_do_call(
-                            &mut store,
-                            params.as_slice(),
-                            results.as_mut_slice(),
-                        )
-                    }
-                    .await?;
-                }
+                store
+                    .on_fiber(|store| unsafe {
+                        let mut ctx = store.as_context_mut();
+                        func.call_impl_do_call(&mut ctx, params.as_slice(), results.as_mut_slice())
+                    })
+                    .await??;
             }
 
             _ => {
-                log::error!("Unexpected non-top-level RR event: {:?}", rr_event);
+                log::error!("Unexpected top-level RR event: {:?}", rr_event);
                 Err(ReplayError::IncorrectEventVariant)?
             }
         }
