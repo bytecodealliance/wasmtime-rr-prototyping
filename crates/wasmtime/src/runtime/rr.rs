@@ -43,7 +43,11 @@ impl FlatBytes for MaybeUninit<ValRaw> {
 
 /// Convenience method hooks for injecting event recording/replaying in the rest of the engine
 mod hooks;
-pub(crate) use hooks::{ConstMemorySliceCell, MemorySliceCell, component_hooks, core_hooks};
+pub(crate) use hooks::core_hooks;
+#[cfg(feature = "component-model")]
+pub(crate) use hooks::{
+    component_hooks, component_hooks::ConstMemorySliceCell, component_hooks::MemorySliceCell,
+};
 
 /// Core infrastructure for RR support
 #[cfg(feature = "rr")]

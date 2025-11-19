@@ -1,4 +1,4 @@
-use crate::component::{FlatTypesStorage, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
+use crate::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 use crate::{EntityType, ModuleInternedTypeIndex, ModuleTypes, PrimaryMap};
 use crate::{TypeTrace, prelude::*};
 use core::hash::{Hash, Hasher};
@@ -1386,6 +1386,83 @@ const fn max_flat(a: Option<u8>, b: Option<u8>) -> Option<u8> {
     }
 }
 
+/// Representation of flat types in 32-bit and 64-bit memory
+///
+/// This could be represented as `Vec<FlatType>` but on 64-bit architectures
+/// that's 24 bytes. Otherwise `FlatType` is 1 byte large and
+/// `MAX_FLAT_TYPES` is 16, so it should ideally be more space-efficient to
+/// use a flat array instead of a heap-based vector.
+#[derive(Debug)]
+pub struct FlatTypesStorage {
+    /// Representation for 32-bit memory
+    pub memory32: [FlatType; MAX_FLAT_TYPES],
+    /// Representation for 64-bit memory
+    pub memory64: [FlatType; MAX_FLAT_TYPES],
+
+    /// Tracks the number of flat types pushed into this storage. If this is
+    /// `MAX_FLAT_TYPES + 1` then this storage represents an un-reprsentable
+    /// type in flat types.
+    ///
+    /// This value should be the same on both `memory32` and `memory64`
+    pub len: u8,
+}
+
+impl FlatTypesStorage {
+    /// Create a new, empty storage for flat types
+    pub const fn new() -> FlatTypesStorage {
+        FlatTypesStorage {
+            memory32: [FlatType::I32; MAX_FLAT_TYPES],
+            memory64: [FlatType::I32; MAX_FLAT_TYPES],
+            len: 0,
+        }
+    }
+
+    /// Returns a reference to flat type representation
+    pub fn as_flat_types(&self) -> Option<FlatTypes<'_>> {
+        let len = usize::from(self.len);
+        if len > MAX_FLAT_TYPES {
+            assert_eq!(len, MAX_FLAT_TYPES + 1);
+            None
+        } else {
+            Some(FlatTypes {
+                memory32: &self.memory32[..len],
+                memory64: &self.memory64[..len],
+            })
+        }
+    }
+
+    /// Pushes a new flat type into this list using `t32` for 32-bit memories
+    /// and `t64` for 64-bit memories.
+    ///
+    /// Returns whether the type was actually pushed or whether this list of
+    /// flat types just exceeded the maximum meaning that it is now
+    /// unrepresentable with a flat list of types.
+    pub fn push(&mut self, t32: FlatType, t64: FlatType) -> bool {
+        let len = usize::from(self.len);
+        if len < MAX_FLAT_TYPES {
+            self.memory32[len] = t32;
+            self.memory64[len] = t64;
+            self.len += 1;
+            true
+        } else {
+            // If this was the first one to go over then flag the length as
+            // being incompatible with a flat representation.
+            if len == MAX_FLAT_TYPES {
+                self.len += 1;
+            }
+            false
+        }
+    }
+
+    /// Generate an iterator over the 32-bit flat encoding
+    pub fn iter32(&self) -> impl Iterator<Item = u8> {
+        self.memory32
+            .iter()
+            .take(self.len as usize)
+            .map(|f| f.byte_size())
+    }
+}
+
 /// Flat representation of a type in just core wasm types.
 pub struct FlatTypes<'a> {
     /// The flat representation of this type in 32-bit memories.
@@ -1417,6 +1494,17 @@ pub enum FlatType {
 }
 
 impl FlatType {
+    /// Constructs the "joined" representation for two flat types
+    pub fn join(&mut self, other: FlatType) {
+        if *self == other {
+            return;
+        }
+        *self = match (*self, other) {
+            (FlatType::I32, FlatType::F32) | (FlatType::F32, FlatType::I32) => FlatType::I32,
+            _ => FlatType::I64,
+        };
+    }
+
     /// Return the size in bytes for this flat type
     pub const fn byte_size(&self) -> u8 {
         match self {

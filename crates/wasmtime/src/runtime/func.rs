@@ -1303,10 +1303,7 @@ impl Func {
         let nparams = ty.params().len();
         val_vec.reserve(nparams + ty.results().len());
 
-        let flat_params = ty
-            .params()
-            .into_iter()
-            .map(|x| x.to_wasm_type().byte_size());
+        let flat_params = ty.params().map(|x| x.to_wasm_type().byte_size());
 
         if !caller.store.0.replay_enabled() {
             rr::core_hooks::record_validate_host_func_entry(
@@ -1332,10 +1329,7 @@ impl Func {
                 values_vec[i] = ret.to_raw(&mut caller.store)?;
             }
 
-            let flat_results = ty
-                .results()
-                .into_iter()
-                .map(|x| x.to_wasm_type().byte_size());
+            let flat_results = ty.results().map(|x| x.to_wasm_type().byte_size());
             rr::core_hooks::record_host_func_return(values_vec, flat_results, &mut caller.store.0)?;
         } else {
             rr::core_hooks::replay_validate_host_func_entry(

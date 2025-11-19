@@ -194,8 +194,7 @@ where
             params.store(&mut store, ty, dst)?;
         }
 
-        let storage_len =
-            mem::size_of_val::<Storage<_, _>>(&mut storage) / mem::size_of::<ValRaw>();
+        let storage_len = mem::size_of_val::<Storage<_, _>>(&storage) / mem::size_of::<ValRaw>();
         let storage_slice: *mut Storage<_, _> = &mut storage;
         let storage_slice = storage_slice.cast::<ValRaw>();
         let storage_slice = core::ptr::slice_from_raw_parts_mut(storage_slice, storage_len);

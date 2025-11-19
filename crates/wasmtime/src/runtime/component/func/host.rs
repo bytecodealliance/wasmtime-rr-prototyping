@@ -867,7 +867,7 @@ where
 
                 storage[0] = MaybeUninit::new(ValRaw::i32(status as i32));
                 rr::component_hooks::record_host_func_return(
-                    &mut storage[..1],
+                    &storage[..1],
                     types,
                     &InterfaceType::U32,
                     store.0,
