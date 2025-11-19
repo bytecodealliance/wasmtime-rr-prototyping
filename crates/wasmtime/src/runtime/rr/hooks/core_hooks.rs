@@ -50,11 +50,15 @@ where
                     || &result,
                 )?;
             result?;
+            Ok(())
+        } else {
+            result
         }
-        return Ok(());
     }
     #[cfg(not(feature = "rr"))]
-    return result;
+    {
+        result
+    }
 }
 
 /// Record hook operation for host function entry events

@@ -71,10 +71,12 @@ where
                 || &result,
             )?;
         result?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(feature = "rr-component"))]
-    return result;
+    {
+        result
+    }
 }
 
 /// Record hook operation for host function entry events

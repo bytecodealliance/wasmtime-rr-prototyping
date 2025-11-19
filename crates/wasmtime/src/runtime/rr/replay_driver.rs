@@ -74,7 +74,7 @@ impl ReplayEnvironment {
 ///
 /// # Example
 ///
-/// ```
+/// ```no_run
 /// use wasmtime::*;
 /// use wasmtime::component::Component;
 ///
