@@ -5,7 +5,7 @@ use core::fmt;
 use core::str::FromStr;
 #[cfg(any(feature = "cache", feature = "cranelift", feature = "winch"))]
 use std::path::Path;
-use wasmparser::WasmFeatures;
+pub use wasmparser::WasmFeatures;
 use wasmtime_environ::{ConfigTunables, TripleExt, Tunables};
 
 #[cfg(feature = "runtime")]
@@ -92,7 +92,7 @@ impl Default for ModuleVersionStrategy {
 impl core::hash::Hash for ModuleVersionStrategy {
     fn hash<H: core::hash::Hasher>(&self, hasher: &mut H) {
         match self {
-            Self::WasmtimeVersion => env!("CARGO_PKG_VERSION").hash(hasher),
+            Self::WasmtimeVersion => env!("CARGO_PKG_VERSION_MAJOR").hash(hasher),
             Self::Custom(s) => s.hash(hasher),
             Self::None => {}
         };
@@ -103,7 +103,7 @@ impl ModuleVersionStrategy {
     /// Get the string-encoding version of the module.
     pub fn as_str(&self) -> &str {
         match &self {
-            Self::WasmtimeVersion => env!("CARGO_PKG_VERSION"),
+            Self::WasmtimeVersion => env!("CARGO_PKG_VERSION_MAJOR"),
             Self::Custom(c) => c,
             Self::None => "",
         }
@@ -185,6 +185,7 @@ pub struct Config {
     pub(crate) coredump_on_trap: bool,
     pub(crate) macos_use_mach_ports: bool,
     pub(crate) detect_host_feature: Option<fn(&str) -> Option<bool>>,
+    pub(crate) x86_float_abi_ok: Option<bool>,
     #[cfg(feature = "rr")]
     pub(crate) rr_config: RRConfig,
 }
@@ -295,6 +296,7 @@ impl Config {
             detect_host_feature: Some(detect_host_feature),
             #[cfg(not(feature = "std"))]
             detect_host_feature: None,
+            x86_float_abi_ok: None,
             #[cfg(feature = "rr")]
             rr_config: RRConfig::None,
         };
@@ -305,9 +307,10 @@ impl Config {
 
             // When running under MIRI try to optimize for compile time of wasm
             // code itself as much as possible. Disable optimizations by
-            // default.
+            // default and use the fastest regalloc available to us.
             if cfg!(miri) {
                 ret.cranelift_opt_level(OptLevel::None);
+                ret.cranelift_regalloc_algorithm(RegallocAlgorithm::SinglePass);
             }
         }
 
@@ -454,8 +457,9 @@ impl Config {
         self
     }
 
-    /// Configures whether DWARF debug information will be emitted during
-    /// compilation.
+    /// Configures whether DWARF debug information will be emitted
+    /// during compilation for a native debugger on the Wasmtime
+    /// process to consume.
     ///
     /// Note that the `debug-builtins` compile-time Cargo feature must also be
     /// enabled for native debuggers such as GDB or LLDB to be able to debug
@@ -464,7 +468,41 @@ impl Config {
     /// By default this option is `false`.
     /// **Note** Enabling this option is not compatible with the Winch compiler.
     pub fn debug_info(&mut self, enable: bool) -> &mut Self {
-        self.tunables.generate_native_debuginfo = Some(enable);
+        self.tunables.debug_native = Some(enable);
+        self
+    }
+
+    /// Configures whether compiled guest code will be instrumented to
+    /// provide debugging at the Wasm VM level.
+    ///
+    /// This is required in order to enable a guest-level debugging
+    /// API that can precisely examine Wasm VM state and (eventually,
+    /// once it is complete) set breakpoints and watchpoints and step
+    /// through code.
+    ///
+    /// Without this enabled, debugging can only be done via a native
+    /// debugger operating on the compiled guest code (see
+    /// [`Config::debug_info`] and is "best-effort": we may be able to
+    /// recover some Wasm locals or operand stack values, but it is
+    /// not guaranteed, even when optimizations are disabled.
+    ///
+    /// When this is enabled, additional instrumentation is inserted
+    /// that directly tracks the Wasm VM state at every step. This has
+    /// some performance impact, but allows perfect debugging
+    /// fidelity.
+    ///
+    /// Breakpoints, watchpoints, and stepping are not yet supported,
+    /// but will be added in a future version of Wasmtime.
+    ///
+    /// This enables use of the [`crate::DebugFrameCursor`] API which is
+    /// provided by [`crate::Caller::debug_frames`] from within a
+    /// hostcall context.
+    ///
+    /// ***Note*** Enabling this option is not compatible with the
+    /// Winch compiler.
+    #[cfg(feature = "debug")]
+    pub fn guest_debug(&mut self, enable: bool) -> &mut Self {
+        self.tunables.debug_guest = Some(enable);
         self
     }
 
@@ -650,7 +688,7 @@ impl Config {
     ///
     /// Epochs (and fuel) do not assist in handling WebAssembly code blocked in
     /// a call to the host. For example if the WebAssembly function calls
-    /// `wasi:io/poll/poll` to sleep epochs will not assist in waking this up or
+    /// `wasi:io/poll.poll` to sleep epochs will not assist in waking this up or
     /// timing it out. Epochs intentionally only affect running WebAssembly code
     /// itself and it's left to the embedder to determine how best to wake up
     /// indefinitely blocking code in the host.
@@ -802,7 +840,18 @@ impl Config {
         self
     }
 
-    fn wasm_feature(&mut self, flag: WasmFeatures, enable: bool) -> &mut Self {
+    /// Explicitly enables (and un-disables) a given set of [`WasmFeatures`].
+    ///
+    /// Note: this is a low-level method that does not necessarily imply that
+    /// wasmtime _supports_ a feature. It should only be used to _disable_
+    /// features that callers want to be rejected by the parser or _enable_
+    /// features callers are certain that the current configuration of wasmtime
+    /// supports.
+    ///
+    /// Feature validation is deferred until an engine is being built, thus by
+    /// enabling features here a caller may cause [`Engine::new`] to fail later,
+    /// if the feature configuration isn't supported.
+    pub fn wasm_features(&mut self, flag: WasmFeatures, enable: bool) -> &mut Self {
         self.enabled_features.set(flag, enable);
         self.disabled_features.set(flag, !enable);
         self
@@ -820,7 +869,7 @@ impl Config {
     ///
     /// [WebAssembly tail calls proposal]: https://github.com/WebAssembly/tail-call
     pub fn wasm_tail_call(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::TAIL_CALL, enable);
+        self.wasm_features(WasmFeatures::TAIL_CALL, enable);
         self
     }
 
@@ -845,7 +894,7 @@ impl Config {
     ///
     /// [WebAssembly custom-page-sizes proposal]: https://github.com/WebAssembly/custom-page-sizes
     pub fn wasm_custom_page_sizes(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::CUSTOM_PAGE_SIZES, enable);
+        self.wasm_features(WasmFeatures::CUSTOM_PAGE_SIZES, enable);
         self
     }
 
@@ -870,7 +919,7 @@ impl Config {
     /// [wasi-threads]: https://github.com/webassembly/wasi-threads
     #[cfg(feature = "threads")]
     pub fn wasm_threads(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::THREADS, enable);
+        self.wasm_features(WasmFeatures::THREADS, enable);
         self
     }
 
@@ -885,7 +934,7 @@ impl Config {
     /// [shared-everything-threads]:
     ///     https://github.com/webassembly/shared-everything-threads
     pub fn wasm_shared_everything_threads(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::SHARED_EVERYTHING_THREADS, enable);
+        self.wasm_features(WasmFeatures::SHARED_EVERYTHING_THREADS, enable);
         self
     }
 
@@ -907,7 +956,7 @@ impl Config {
     /// [proposal]: https://github.com/webassembly/reference-types
     #[cfg(feature = "gc")]
     pub fn wasm_reference_types(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::REFERENCE_TYPES, enable);
+        self.wasm_features(WasmFeatures::REFERENCE_TYPES, enable);
         self
     }
 
@@ -926,7 +975,7 @@ impl Config {
     /// [proposal]: https://github.com/WebAssembly/function-references
     #[cfg(feature = "gc")]
     pub fn wasm_function_references(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::FUNCTION_REFERENCES, enable);
+        self.wasm_features(WasmFeatures::FUNCTION_REFERENCES, enable);
         self
     }
 
@@ -937,7 +986,7 @@ impl Config {
     ///
     /// [proposal]: https://github.com/WebAssembly/wide-arithmetic
     pub fn wasm_wide_arithmetic(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::WIDE_ARITHMETIC, enable);
+        self.wasm_features(WasmFeatures::WIDE_ARITHMETIC, enable);
         self
     }
 
@@ -958,7 +1007,7 @@ impl Config {
     /// [proposal]: https://github.com/WebAssembly/gc
     #[cfg(feature = "gc")]
     pub fn wasm_gc(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::GC, enable);
+        self.wasm_features(WasmFeatures::GC, enable);
         self
     }
 
@@ -979,7 +1028,7 @@ impl Config {
     /// [proposal]: https://github.com/webassembly/simd
     /// [relaxed simd proposal]: https://github.com/WebAssembly/relaxed-simd
     pub fn wasm_simd(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::SIMD, enable);
+        self.wasm_features(WasmFeatures::SIMD, enable);
         self
     }
 
@@ -1006,7 +1055,7 @@ impl Config {
     ///
     /// [proposal]: https://github.com/webassembly/relaxed-simd
     pub fn wasm_relaxed_simd(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::RELAXED_SIMD, enable);
+        self.wasm_features(WasmFeatures::RELAXED_SIMD, enable);
         self
     }
 
@@ -1055,7 +1104,7 @@ impl Config {
     ///
     /// [proposal]: https://github.com/webassembly/bulk-memory-operations
     pub fn wasm_bulk_memory(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::BULK_MEMORY, enable);
+        self.wasm_features(WasmFeatures::BULK_MEMORY, enable);
         self
     }
 
@@ -1069,7 +1118,7 @@ impl Config {
     ///
     /// [proposal]: https://github.com/webassembly/multi-value
     pub fn wasm_multi_value(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::MULTI_VALUE, enable);
+        self.wasm_features(WasmFeatures::MULTI_VALUE, enable);
         self
     }
 
@@ -1083,7 +1132,7 @@ impl Config {
     ///
     /// [proposal]: https://github.com/webassembly/multi-memory
     pub fn wasm_multi_memory(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::MULTI_MEMORY, enable);
+        self.wasm_features(WasmFeatures::MULTI_MEMORY, enable);
         self
     }
 
@@ -1098,7 +1147,7 @@ impl Config {
     ///
     /// [proposal]: https://github.com/webassembly/memory64
     pub fn wasm_memory64(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::MEMORY64, enable);
+        self.wasm_features(WasmFeatures::MEMORY64, enable);
         self
     }
 
@@ -1109,7 +1158,7 @@ impl Config {
     ///
     /// [proposal]: https://github.com/webassembly/extended-const
     pub fn wasm_extended_const(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::EXTENDED_CONST, enable);
+        self.wasm_features(WasmFeatures::EXTENDED_CONST, enable);
         self
     }
 
@@ -1127,7 +1176,7 @@ impl Config {
     ///
     /// [proposal]: https://github.com/webassembly/stack-switching
     pub fn wasm_stack_switching(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::STACK_SWITCHING, enable);
+        self.wasm_features(WasmFeatures::STACK_SWITCHING, enable);
         self
     }
 
@@ -1146,7 +1195,7 @@ impl Config {
     /// [proposal]: https://github.com/webassembly/component-model
     #[cfg(feature = "component-model")]
     pub fn wasm_component_model(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::COMPONENT_MODEL, enable);
+        self.wasm_features(WasmFeatures::COMPONENT_MODEL, enable);
         self
     }
 
@@ -1161,7 +1210,7 @@ impl Config {
     ///     https://github.com/WebAssembly/component-model/blob/main/design/mvp/Async.md
     #[cfg(feature = "component-model-async")]
     pub fn wasm_component_model_async(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::CM_ASYNC, enable);
+        self.wasm_features(WasmFeatures::CM_ASYNC, enable);
         self
     }
 
@@ -1174,7 +1223,7 @@ impl Config {
     ///     https://github.com/WebAssembly/component-model/blob/main/design/mvp/Async.md
     #[cfg(feature = "component-model-async")]
     pub fn wasm_component_model_async_builtins(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::CM_ASYNC_BUILTINS, enable);
+        self.wasm_features(WasmFeatures::CM_ASYNC_BUILTINS, enable);
         self
     }
 
@@ -1186,7 +1235,20 @@ impl Config {
     /// [proposal]: https://github.com/WebAssembly/component-model/blob/main/design/mvp/Async.md
     #[cfg(feature = "component-model-async")]
     pub fn wasm_component_model_async_stackful(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::CM_ASYNC_STACKFUL, enable);
+        self.wasm_features(WasmFeatures::CM_ASYNC_STACKFUL, enable);
+        self
+    }
+
+    /// This corresponds to the 🧵 emoji in the component model specification.
+    ///
+    /// Please note that Wasmtime's support for this feature is _very_
+    /// incomplete.
+    ///
+    /// [proposal]:
+    ///     https://github.com/WebAssembly/component-model/pull/557
+    #[cfg(feature = "component-model-async")]
+    pub fn wasm_component_model_threading(&mut self, enable: bool) -> &mut Self {
+        self.wasm_features(WasmFeatures::CM_THREADING, enable);
         self
     }
 
@@ -1198,7 +1260,7 @@ impl Config {
     /// [proposal]: https://github.com/WebAssembly/component-model/blob/main/design/mvp/Async.md
     #[cfg(feature = "component-model")]
     pub fn wasm_component_model_error_context(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::CM_ERROR_CONTEXT, enable);
+        self.wasm_features(WasmFeatures::CM_ERROR_CONTEXT, enable);
         self
     }
 
@@ -1213,13 +1275,16 @@ impl Config {
     /// [proposal]: https://github.com/WebAssembly/component-model/issues/525
     #[cfg(feature = "component-model")]
     pub fn wasm_component_model_gc(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::CM_GC, enable);
+        self.wasm_features(WasmFeatures::CM_GC, enable);
         self
     }
 
-    #[doc(hidden)] // FIXME(#3427) - if/when implemented then un-hide this
+    /// Configures whether the [Exception-handling proposal][proposal] is enabled or not.
+    ///
+    /// [proposal]: https://github.com/WebAssembly/exception-handling
+    #[cfg(feature = "gc")]
     pub fn wasm_exceptions(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::EXCEPTIONS, enable);
+        self.wasm_features(WasmFeatures::EXCEPTIONS, enable);
         self
     }
 
@@ -1228,7 +1293,7 @@ impl Config {
                     usage with the spec testsuite. It may be removed at \
                     any time and without warning. Do not rely on it!"]
     pub fn wasm_legacy_exceptions(&mut self, enable: bool) -> &mut Self {
-        self.wasm_feature(WasmFeatures::LEGACY_EXCEPTIONS, enable);
+        self.wasm_features(WasmFeatures::LEGACY_EXCEPTIONS, enable);
         self
     }
 
@@ -1294,6 +1359,15 @@ impl Config {
         self
     }
 
+    /// Configures whether extra debug checks are inserted into
+    /// Wasmtime-generated code by Cranelift.
+    ///
+    /// The default value for this is `false`
+    #[cfg(any(feature = "cranelift", feature = "winch"))]
+    pub fn cranelift_wasmtime_debug_checks(&mut self, enable: bool) -> &mut Self {
+        unsafe { self.cranelift_flag_set("wasmtime_debug_checks", &enable.to_string()) }
+    }
+
     /// Configures the Cranelift code generator optimization level.
     ///
     /// When the Cranelift code generator is used you can configure the
@@ -1327,6 +1401,7 @@ impl Config {
     pub fn cranelift_regalloc_algorithm(&mut self, algo: RegallocAlgorithm) -> &mut Self {
         let val = match algo {
             RegallocAlgorithm::Backtracking => "backtracking",
+            RegallocAlgorithm::SinglePass => "single_pass",
         };
         self.compiler_config
             .settings
@@ -1888,7 +1963,7 @@ impl Config {
             // This case requires special precondition for assertion in SerializedModule::to_bytes
             ModuleVersionStrategy::Custom(ref v) => {
                 if v.as_bytes().len() > 255 {
-                    bail!("custom module version cannot be more than 255 bytes: {}", v);
+                    bail!("custom module version cannot be more than 255 bytes: {v}");
                 }
             }
             _ => {}
@@ -2068,7 +2143,7 @@ impl Config {
     /// This may result in faster execution at runtime, but adds additional
     /// compilation time. Inlining may also enlarge the size of compiled
     /// artifacts (for example, the size of the result of
-    /// [`Engine::precompile_component`]).
+    /// [`Engine::precompile_component`](crate::Engine::precompile_component)).
     ///
     /// Inlining is not supported by all of Wasmtime's compilation strategies;
     /// currently, it only Cranelift supports it. This setting will be ignored
@@ -2102,11 +2177,49 @@ impl Config {
     /// backend partially supports simd so it's not listed here. Winch doesn't
     /// fully support simd but unimplemented instructions just return errors.
     fn compiler_panicking_wasm_features(&self) -> WasmFeatures {
+        // First we compute the set of features that Wasmtime itself knows;
+        // this is a sort of "maximal set" that we invert to create a set
+        // of features we _definitely can't support_ because wasmtime
+        // has never heard of them.
+        let features_known_to_wasmtime = WasmFeatures::empty()
+            | WasmFeatures::MUTABLE_GLOBAL
+            | WasmFeatures::SATURATING_FLOAT_TO_INT
+            | WasmFeatures::SIGN_EXTENSION
+            | WasmFeatures::REFERENCE_TYPES
+            | WasmFeatures::CALL_INDIRECT_OVERLONG
+            | WasmFeatures::MULTI_VALUE
+            | WasmFeatures::BULK_MEMORY
+            | WasmFeatures::BULK_MEMORY_OPT
+            | WasmFeatures::SIMD
+            | WasmFeatures::RELAXED_SIMD
+            | WasmFeatures::THREADS
+            | WasmFeatures::SHARED_EVERYTHING_THREADS
+            | WasmFeatures::TAIL_CALL
+            | WasmFeatures::FLOATS
+            | WasmFeatures::MULTI_MEMORY
+            | WasmFeatures::EXCEPTIONS
+            | WasmFeatures::MEMORY64
+            | WasmFeatures::EXTENDED_CONST
+            | WasmFeatures::COMPONENT_MODEL
+            | WasmFeatures::FUNCTION_REFERENCES
+            | WasmFeatures::GC
+            | WasmFeatures::CUSTOM_PAGE_SIZES
+            | WasmFeatures::GC_TYPES
+            | WasmFeatures::STACK_SWITCHING
+            | WasmFeatures::WIDE_ARITHMETIC
+            | WasmFeatures::CM_ASYNC
+            | WasmFeatures::CM_ASYNC_STACKFUL
+            | WasmFeatures::CM_ASYNC_BUILTINS
+            | WasmFeatures::CM_THREADING
+            | WasmFeatures::CM_ERROR_CONTEXT
+            | WasmFeatures::CM_GC;
+
+        #[allow(unused_mut, reason = "easier to avoid #[cfg]")]
+        let mut unsupported = !features_known_to_wasmtime;
+
         #[cfg(any(feature = "cranelift", feature = "winch"))]
         match self.compiler_config.strategy {
             None | Some(Strategy::Cranelift) => {
-                let mut unsupported = WasmFeatures::empty();
-
                 // Pulley at this time fundamentally doesn't support the
                 // `threads` proposal, notably shared memory, because Rust can't
                 // safely implement loads/stores in the face of shared memory.
@@ -2135,17 +2248,17 @@ impl Config {
                         unsupported |= WasmFeatures::STACK_SWITCHING;
                     }
                 }
-                unsupported
             }
             Some(Strategy::Winch) => {
-                let mut unsupported = WasmFeatures::GC
+                unsupported |= WasmFeatures::GC
                     | WasmFeatures::FUNCTION_REFERENCES
                     | WasmFeatures::RELAXED_SIMD
                     | WasmFeatures::TAIL_CALL
                     | WasmFeatures::GC_TYPES
                     | WasmFeatures::EXCEPTIONS
                     | WasmFeatures::LEGACY_EXCEPTIONS
-                    | WasmFeatures::STACK_SWITCHING;
+                    | WasmFeatures::STACK_SWITCHING
+                    | WasmFeatures::CM_ASYNC;
                 match self.compiler_target().architecture {
                     target_lexicon::Architecture::Aarch64(_) => {
                         unsupported |= WasmFeatures::THREADS;
@@ -2157,12 +2270,10 @@ impl Config {
                     // them.
                     _ => {}
                 }
-                unsupported
             }
             Some(Strategy::Auto) => unreachable!(),
         }
-        #[cfg(not(any(feature = "cranelift", feature = "winch")))]
-        return WasmFeatures::empty();
+        unsupported
     }
 
     /// Calculates the set of features that are enabled for this `Config`.
@@ -2262,9 +2373,16 @@ impl Config {
         if self.max_wasm_stack == 0 {
             bail!("max_wasm_stack size cannot be zero");
         }
-        #[cfg(not(feature = "wmemcheck"))]
-        if self.wmemcheck {
+        if !cfg!(feature = "wmemcheck") && self.wmemcheck {
             bail!("wmemcheck (memory checker) was requested but is not enabled in this build");
+        }
+
+        if !cfg!(feature = "gc") && features.gc_types() {
+            bail!("support for GC was disabled at compile time")
+        }
+
+        if !cfg!(feature = "gc") && features.contains(WasmFeatures::EXCEPTIONS) {
+            bail!("exceptions support requires garbage collection (GC) to be enabled in the build");
         }
 
         let mut tunables = Tunables::default_for_target(&self.compiler_target())?;
@@ -2317,6 +2435,10 @@ impl Config {
         } else {
             None
         };
+
+        if !cfg!(feature = "debug") && tunables.debug_guest {
+            bail!("debug instrumentation support was disabled at compile time");
+        }
 
         Ok((tunables, features))
     }
@@ -2408,7 +2530,7 @@ impl Config {
     #[cfg(any(feature = "cranelift", feature = "winch"))]
     pub(crate) fn build_compiler(
         mut self,
-        tunables: &Tunables,
+        tunables: &mut Tunables,
         features: WasmFeatures,
     ) -> Result<(Self, Box<dyn wasmtime_environ::Compiler>)> {
         let target = self.compiler_target();
@@ -2514,18 +2636,6 @@ impl Config {
             }
         }
 
-        // check for incompatible compiler options and set required values
-        if features.contains(WasmFeatures::REFERENCE_TYPES) {
-            if !self
-                .compiler_config
-                .ensure_setting_unset_or_given("enable_safepoints", "true")
-            {
-                bail!(
-                    "compiler option 'enable_safepoints' must be enabled when 'reference types' is enabled"
-                );
-            }
-        }
-
         if features.contains(WasmFeatures::RELAXED_SIMD) && !features.contains(WasmFeatures::SIMD) {
             bail!("cannot disable the simd proposal but enable the relaxed simd proposal");
         }
@@ -2545,8 +2655,7 @@ impl Config {
                 .ensure_setting_unset_or_given("stack_switch_model", model)
             {
                 bail!(
-                    "compiler option 'stack_switch_model' must be set to '{}' on this platform",
-                    model
+                    "compiler option 'stack_switch_model' must be set to '{model}' on this platform"
                 );
             }
         }
@@ -2559,6 +2668,7 @@ impl Config {
         for flag in self.compiler_config.flags.iter() {
             compiler.enable(flag)?;
         }
+        *tunables = compiler.tunables().cloned().unwrap();
 
         #[cfg(all(feature = "incremental-cache", feature = "cranelift"))]
         if let Some(cache_store) = &self.compiler_config.cache_store {
@@ -2712,6 +2822,90 @@ impl Config {
         self
     }
 
+    /// Enable/disable GC support in Wasmtime entirely.
+    ///
+    /// This flag can be used to gate whether GC infrastructure is enabled or
+    /// initialized in Wasmtime at all. Wasmtime's GC implementation is required
+    /// for the [`Self::wasm_gc`] proposal, [`Self::wasm_function_references`],
+    /// and [`Self::wasm_exceptions`] at this time. None of those proposal can
+    /// be enabled without also having this option enabled.
+    ///
+    /// This option defaults to whether the crate `gc` feature is enabled or
+    /// not.
+    pub fn gc_support(&mut self, enable: bool) -> &mut Self {
+        self.wasm_features(WasmFeatures::GC_TYPES, enable)
+    }
+
+    /// Explicitly indicate or not whether the host is using a hardware float
+    /// ABI on x86 targets.
+    ///
+    /// This configuration option is only applicable on the
+    /// `x86_64-unknown-none` Rust target and has no effect on other host
+    /// targets. The `x86_64-unknown-none` Rust target does not support hardware
+    /// floats by default and uses a "soft float" implementation and ABI. This
+    /// means that `f32`, for example, is passed in a general-purpose register
+    /// between functions instead of a floating-point register. This does not
+    /// match Cranelift's ABI for `f32` where it's passed in floating-point
+    /// registers.  Cranelift does not have support for a "soft float"
+    /// implementation where all floating-point operations are lowered to
+    /// libcalls.
+    ///
+    /// This means that for the `x86_64-unknown-none` target the ABI between
+    /// Wasmtime's libcalls and the host is incompatible when floats are used.
+    /// This further means that, by default, Wasmtime is unable to load native
+    /// code when compiled to the `x86_64-unknown-none` target. The purpose of
+    /// this option is to explicitly allow loading code and bypass this check.
+    ///
+    /// Setting this configuration option to `true` indicates that either:
+    /// (a) the Rust target is compiled with the hard-float ABI manually via
+    /// `-Zbuild-std` and a custom target JSON configuration, or (b) sufficient
+    /// x86 features have been enabled in the compiler such that float libcalls
+    /// will not be used in Wasmtime. For (a) there is no way in Rust at this
+    /// time to detect whether a hard-float or soft-float ABI is in use on
+    /// stable Rust, so this manual opt-in is required. For (b) the only
+    /// instance where Wasmtime passes a floating-point value in a register
+    /// between the host and compiled wasm code is with libcalls.
+    ///
+    /// Float-based libcalls are only used when the compilation target for a
+    /// wasm module has insufficient target features enabled for native
+    /// support. For example SSE4.1 is required for the `f32.ceil` WebAssembly
+    /// instruction to be compiled to a native instruction. If SSE4.1 is not
+    /// enabled then `f32.ceil` is translated to a "libcall" which is
+    /// implemented on the host. Float-based libcalls can be avoided with
+    /// sufficient target features enabled, for example:
+    ///
+    /// * `self.cranelift_flag_enable("has_sse3")`
+    /// * `self.cranelift_flag_enable("has_ssse3")`
+    /// * `self.cranelift_flag_enable("has_sse41")`
+    /// * `self.cranelift_flag_enable("has_sse42")`
+    /// * `self.cranelift_flag_enable("has_fma")`
+    ///
+    /// Note that when these features are enabled Wasmtime will perform a
+    /// runtime check to determine that the host actually has the feature
+    /// present.
+    ///
+    /// For some more discussion see [#11506].
+    ///
+    /// [#11506]: https://github.com/bytecodealliance/wasmtime/issues/11506
+    ///
+    /// # Safety
+    ///
+    /// This method is not safe because it cannot be detected in Rust right now
+    /// whether the host is compiled with a soft or hard float ABI. Additionally
+    /// if the host is compiled with a soft float ABI disabling this check does
+    /// not ensure that the wasm module in question has zero usage of floats
+    /// in the boundary to the host.
+    ///
+    /// Safely using this method requires one of:
+    ///
+    /// * The host target is compiled to use hardware floats.
+    /// * Wasm modules loaded are compiled with enough x86 Cranelift features
+    ///   enabled to avoid float-related hostcalls.
+    pub unsafe fn x86_float_abi_ok(&mut self, enable: bool) -> &mut Self {
+        self.x86_float_abi_ok = Some(enable);
+        self
+    }
+
     /// Enforce deterministic execution configurations. Currently, this means the following:
     /// * Enabling NaN canonicalization with [`Config::cranelift_nan_canonicalization`]
     /// * Enabling deterministic relaxed SIMD with [`Config::relaxed_simd_deterministic`]
@@ -2804,8 +2998,9 @@ pub enum Strategy {
     /// code generator which generates high quality machine code.
     Cranelift,
 
-    /// A baseline compiler for WebAssembly, currently under active development and not ready for
-    /// production applications.
+    /// A low-latency baseline compiler for WebAssembly.
+    /// For more details regarding ISA support and Wasm proposals support
+    /// see https://docs.wasmtime.dev/stability-tiers.html#current-tier-status
     Winch,
 }
 
@@ -2982,6 +3177,22 @@ pub enum RegallocAlgorithm {
     /// results in better register utilization, producing fewer spills
     /// and moves, but can cause super-linear compile runtime.
     Backtracking,
+    /// Generates acceptable code very quickly.
+    ///
+    /// This algorithm performs a single pass through the code,
+    /// guaranteed to work in linear time.  (Note that the rest of
+    /// Cranelift is not necessarily guaranteed to run in linear time,
+    /// however.) It cannot undo earlier decisions, however, and it
+    /// cannot foresee constraints or issues that may occur further
+    /// ahead in the code, so the code may have more spills and moves as
+    /// a result.
+    ///
+    /// > **Note**: This algorithm is not yet production-ready and has
+    /// > historically had known problems. It is not recommended to enable this
+    /// > algorithm for security-sensitive applications and the Wasmtime project
+    /// > does not consider this configuration option for issuing security
+    /// > advisories at this time.
+    SinglePass,
 }
 
 /// Select which profiling technique to support.
@@ -3022,16 +3233,17 @@ pub enum WasmBacktraceDetails {
     Environment,
 }
 
-/// Describe the tri-state configuration of memory protection keys (MPK).
+/// Describe the tri-state configuration of keys such as MPK or PAGEMAP_SCAN.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum MpkEnabled {
-    /// Use MPK if supported by the current system; fall back to guard regions
-    /// otherwise.
+pub enum Enabled {
+    /// Enable this feature if it's detected on the host system, otherwise leave
+    /// it disabled.
     Auto,
-    /// Use MPK or fail if not supported.
-    Enable,
-    /// Do not use MPK.
-    Disable,
+    /// Enable this feature and fail configuration if the feature is not
+    /// detected on the host system.
+    Yes,
+    /// Do not enable this feature, even if the host system supports it.
+    No,
 }
 
 /// Configuration options used with [`InstanceAllocationStrategy::Pooling`] to
@@ -3212,11 +3424,11 @@ impl PoolingAllocationConfig {
     /// How much memory, in bytes, to keep resident for async stacks allocated
     /// with the pooling allocator.
     ///
-    /// When [`PoolingAllocationConfig::async_stack_zeroing`] is enabled then
-    /// Wasmtime will reset the contents of async stacks back to zero upon
-    /// deallocation. This option can be used to perform the zeroing operation
-    /// with `memset` up to a certain threshold of bytes instead of using system
-    /// calls to reset the stack to zero.
+    /// When [`Config::async_stack_zeroing`] is enabled then Wasmtime will reset
+    /// the contents of async stacks back to zero upon deallocation. This option
+    /// can be used to perform the zeroing operation with `memset` up to a
+    /// certain threshold of bytes instead of using system calls to reset the
+    /// stack to zero.
     ///
     /// Note that when using this option the memory with async stacks will
     /// never be decommitted.
@@ -3554,11 +3766,11 @@ impl PoolingAllocationConfig {
     ///
     /// - `auto`: if MPK support is available the guard regions are removed; if
     ///   not, the guard regions remain
-    /// - `enable`: use MPK to eliminate guard regions; fail if MPK is not
+    /// - `yes`: use MPK to eliminate guard regions; fail if MPK is not
     ///   supported
-    /// - `disable`: never use MPK
+    /// - `no`: never use MPK
     ///
-    /// By default this value is `disabled`, but may become `auto` in future
+    /// By default this value is `no`, but may become `auto` in future
     /// releases.
     ///
     /// __WARNING__: this configuration options is still experimental--use at
@@ -3566,7 +3778,7 @@ impl PoolingAllocationConfig {
     /// regions; you may observe segmentation faults if anything is
     /// misconfigured.
     #[cfg(feature = "memory-protection-keys")]
-    pub fn memory_protection_keys(&mut self, enable: MpkEnabled) -> &mut Self {
+    pub fn memory_protection_keys(&mut self, enable: Enabled) -> &mut Self {
         self.config.memory_protection_keys = enable;
         self
     }
@@ -3592,7 +3804,7 @@ impl PoolingAllocationConfig {
     /// Check if memory protection keys (MPK) are available on the current host.
     ///
     /// This is a convenience method for determining MPK availability using the
-    /// same method that [`MpkEnabled::Auto`] does. See
+    /// same method that [`Enabled::Auto`] does. See
     /// [`PoolingAllocationConfig::memory_protection_keys`] for more
     /// information.
     #[cfg(feature = "memory-protection-keys")]
@@ -3612,6 +3824,45 @@ impl PoolingAllocationConfig {
     pub fn total_gc_heaps(&mut self, count: u32) -> &mut Self {
         self.config.limits.total_gc_heaps = count;
         self
+    }
+
+    /// Configures whether the Linux-specific [`PAGEMAP_SCAN` ioctl][ioctl] is
+    /// used to help reset linear memory.
+    ///
+    /// When [`Self::linear_memory_keep_resident`] or
+    /// [`Self::table_keep_resident`] options are configured to nonzero values
+    /// the default behavior is to `memset` the lowest addresses of a table or
+    /// memory back to their original contents. With the `PAGEMAP_SCAN` ioctl on
+    /// Linux this can be done to more intelligently scan for resident pages in
+    /// the region and only reset those pages back to their original contents
+    /// with `memset` rather than assuming the low addresses are all resident.
+    ///
+    /// This ioctl has the potential to provide a number of performance benefits
+    /// in high-reuse and high concurrency scenarios. Notably this enables
+    /// Wasmtime to scan the entire region of WebAssembly linear memory and
+    /// manually reset memory back to its original contents, up to
+    /// [`Self::linear_memory_keep_resident`] bytes, possibly skipping an
+    /// `madvise` entirely. This can be more efficient by avoiding removing
+    /// pages from the address space entirely and additionally ensuring that
+    /// future use of the linear memory doesn't incur page faults as the pages
+    /// remain resident.
+    ///
+    /// At this time this configuration option is still being evaluated as to
+    /// how appropriate it is for all use cases. It currently defaults to
+    /// `no` or disabled but may change to `auto`, enable if supported, in the
+    /// future. This option is only supported on Linux and requires a kernel
+    /// version of 6.7 or higher.
+    ///
+    /// [ioctl]: https://www.man7.org/linux/man-pages/man2/PAGEMAP_SCAN.2const.html
+    pub fn pagemap_scan(&mut self, enable: Enabled) -> &mut Self {
+        self.config.pagemap_scan = enable;
+        self
+    }
+
+    /// Tests whether [`Self::pagemap_scan`] is available or not on the host
+    /// system.
+    pub fn is_pagemap_scan_available() -> bool {
+        crate::runtime::vm::PoolingInstanceAllocatorConfig::is_pagemap_scan_available()
     }
 }
 

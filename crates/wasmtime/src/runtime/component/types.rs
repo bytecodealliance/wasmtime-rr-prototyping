@@ -10,7 +10,7 @@ use wasmtime_environ::component::{
     ComponentTypes, Export, InterfaceType, ResourceIndex, TypeComponentIndex,
     TypeComponentInstanceIndex, TypeDef, TypeEnumIndex, TypeFlagsIndex, TypeFuncIndex,
     TypeFutureIndex, TypeFutureTableIndex, TypeListIndex, TypeModuleIndex, TypeOptionIndex,
-    TypeRecordIndex, TypeResourceTableIndex, TypeResultIndex, TypeStreamIndex,
+    TypeRecordIndex, TypeResourceTable, TypeResourceTableIndex, TypeResultIndex, TypeStreamIndex,
     TypeStreamTableIndex, TypeTupleIndex, TypeVariantIndex,
 };
 
@@ -166,9 +166,23 @@ impl TypeChecker<'_> {
     }
 
     fn resources_equal(&self, o1: TypeResourceTableIndex, o2: TypeResourceTableIndex) -> bool {
-        let a = &self.a_types[o1];
-        let b = &self.b_types[o2];
-        self.a_resource[a.ty] == self.b_resource[b.ty]
+        match (&self.a_types[o1], &self.b_types[o2]) {
+            // Concrete resource types are the same if they map back to the
+            // exact same `ResourceType` at runtime, so look them up in resource
+            // type tables and compare the types themselves.
+            (
+                TypeResourceTable::Concrete { ty: a, .. },
+                TypeResourceTable::Concrete { ty: b, .. },
+            ) => self.a_resource[*a] == self.b_resource[*b],
+            (TypeResourceTable::Concrete { .. }, _) => false,
+
+            // Abstract resource types are only the same if they have the same
+            // index and come from the exact same component.
+            (TypeResourceTable::Abstract(a), TypeResourceTable::Abstract(b)) => {
+                core::ptr::eq(self.a_types, self.b_types) && a == b
+            }
+            (TypeResourceTable::Abstract(_), _) => false,
+        }
     }
 
     fn records_equal(&self, r1: TypeRecordIndex, r2: TypeRecordIndex) -> bool {
@@ -801,6 +815,11 @@ impl ComponentFunc {
         Self(Handle::new(index, ty))
     }
 
+    /// Returns whether this is an async function
+    pub fn async_(&self) -> bool {
+        self.0.types[self.0.index].async_
+    }
+
     /// Iterates over types of function parameters and names.
     pub fn params(&self) -> impl ExactSizeIterator<Item = (&str, Type)> + '_ {
         let ty = &self.0.types[self.0.index];
@@ -1001,18 +1020,24 @@ impl ComponentItem {
                     subty.unwrap_func().clone(),
                 ))
             }
-            TypeDef::Resource(idx) => {
-                let resource_index = ty.types[*idx].ty;
-                let ty = match ty.resources.get(resource_index) {
-                    // This resource type was substituted by a linker for
-                    // example so it's replaced here.
-                    Some(ty) => *ty,
+            TypeDef::Resource(idx) => match ty.types[*idx] {
+                TypeResourceTable::Concrete {
+                    ty: resource_index, ..
+                } => {
+                    let ty = match ty.resources.get(resource_index) {
+                        // This resource type was substituted by a linker for
+                        // example so it's replaced here.
+                        Some(ty) => *ty,
 
-                    // This resource type was not substituted.
-                    None => ResourceType::uninstantiated(&ty.types, resource_index),
-                };
-                Self::Resource(ty)
-            }
+                        // This resource type was not substituted.
+                        None => ResourceType::uninstantiated(&ty.types, resource_index),
+                    };
+                    Self::Resource(ty)
+                }
+                TypeResourceTable::Abstract(resource_index) => {
+                    Self::Resource(ResourceType::abstract_(&ty.types, resource_index))
+                }
+            },
         }
     }
     pub(crate) fn from_export(engine: &Engine, export: &Export, ty: &InstanceType<'_>) -> Self {

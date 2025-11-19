@@ -3,10 +3,9 @@
 
 use crate::prelude::*;
 use crate::{
-    BuiltinFunctionIndex, DefinedFuncIndex, FlagValue, FuncIndex, FunctionLoc, ObjectKind,
-    PrimaryMap, StaticModuleIndex, TripleExt, WasmError, WasmFuncType,
+    DefinedFuncIndex, FlagValue, FuncKey, FunctionLoc, ObjectKind, PrimaryMap, StaticModuleIndex,
+    TripleExt, Tunables, WasmError, WasmFuncType, obj,
 };
-use crate::{Tunables, obj};
 use anyhow::Result;
 use object::write::{Object, SymbolId};
 use object::{Architecture, BinaryFormat, FileFlags};
@@ -17,6 +16,7 @@ use std::path;
 use std::sync::Arc;
 
 mod address_map;
+mod frame_table;
 mod module_artifacts;
 mod module_environ;
 mod module_types;
@@ -24,6 +24,7 @@ mod stack_maps;
 mod trap_encoding;
 
 pub use self::address_map::*;
+pub use self::frame_table::*;
 pub use self::module_artifacts::*;
 pub use self::module_environ::*;
 pub use self::module_types::*;
@@ -68,19 +69,6 @@ impl core::error::Error for CompileError {
             _ => None,
         }
     }
-}
-
-/// What relocations can be applied against.
-///
-/// Each wasm function may refer to various other `RelocationTarget` entries.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum RelocationTarget {
-    /// This is a reference to another defined wasm function in the same module.
-    Wasm(FuncIndex),
-    /// This is a reference to a trampoline for a builtin function.
-    Builtin(BuiltinFunctionIndex),
-    /// A pulley->host call from the interpreter.
-    PulleyHostcall(u32),
 }
 
 /// Implementation of an incremental compilation's key/value cache store.
@@ -142,6 +130,9 @@ pub trait CompilerBuilder: Send + Sync + fmt::Debug {
     /// Set the tunables for this compiler.
     fn set_tunables(&mut self, tunables: Tunables) -> Result<()>;
 
+    /// Get the tunables used by this compiler.
+    fn tunables(&self) -> Option<&Tunables>;
+
     /// Builds a new [`Compiler`] object from this configuration.
     fn build(&self) -> Result<Box<dyn Compiler>>;
 
@@ -191,7 +182,7 @@ pub struct CompiledFunctionBody {
 ///
 /// The diagram below depicts typical usage of this trait:
 ///
-/// ```ignore
+/// ```text
 ///                     +------+
 ///                     | Wasm |
 ///                     +------+
@@ -259,7 +250,7 @@ pub trait Compiler: Send + Sync {
     fn compile_function(
         &self,
         translation: &ModuleTranslation<'_>,
-        index: DefinedFuncIndex,
+        key: FuncKey,
         data: FunctionBodyData<'_>,
         types: &ModuleTypesBuilder,
         symbol: &str,
@@ -274,7 +265,7 @@ pub trait Compiler: Send + Sync {
         &self,
         translation: &ModuleTranslation<'_>,
         types: &ModuleTypesBuilder,
-        index: DefinedFuncIndex,
+        key: FuncKey,
         symbol: &str,
     ) -> Result<CompiledFunctionBody, CompileError>;
 
@@ -286,6 +277,7 @@ pub trait Compiler: Send + Sync {
     fn compile_wasm_to_array_trampoline(
         &self,
         wasm_func_ty: &WasmFuncType,
+        key: FuncKey,
         symbol: &str,
     ) -> Result<CompiledFunctionBody, CompileError>;
 
@@ -300,7 +292,7 @@ pub trait Compiler: Send + Sync {
     /// call.
     fn compile_wasm_to_builtin(
         &self,
-        index: BuiltinFunctionIndex,
+        key: FuncKey,
         symbol: &str,
     ) -> Result<CompiledFunctionBody, CompileError>;
 
@@ -309,7 +301,7 @@ pub trait Compiler: Send + Sync {
     fn compiled_function_relocation_targets<'a>(
         &'a self,
         func: &'a dyn Any,
-    ) -> Box<dyn Iterator<Item = RelocationTarget> + 'a>;
+    ) -> Box<dyn Iterator<Item = FuncKey> + 'a>;
 
     /// Appends a list of compiled functions to an in-memory object.
     ///
@@ -341,8 +333,8 @@ pub trait Compiler: Send + Sync {
     fn append_code(
         &self,
         obj: &mut Object<'static>,
-        funcs: &[(String, Box<dyn Any + Send + Sync>)],
-        resolve_reloc: &dyn Fn(usize, RelocationTarget) -> usize,
+        funcs: &[(String, FuncKey, Box<dyn Any + Send + Sync>)],
+        resolve_reloc: &dyn Fn(usize, FuncKey) -> usize,
     ) -> Result<Vec<(SymbolId, FunctionLoc)>>;
 
     /// Creates a new `Object` file which is used to build the results of a
@@ -372,7 +364,7 @@ pub trait Compiler: Send + Sync {
             Pulley32 | Pulley32be => (Architecture::Riscv64, obj::EF_WASMTIME_PULLEY32),
             Pulley64 | Pulley64be => (Architecture::Riscv64, obj::EF_WASMTIME_PULLEY64),
             architecture => {
-                anyhow::bail!("target architecture {:?} is unsupported", architecture,);
+                anyhow::bail!("target architecture {architecture:?} is unsupported");
             }
         };
         let mut obj = Object::new(
@@ -469,7 +461,7 @@ pub trait Compiler: Send + Sync {
 /// An inlining compiler.
 pub trait InliningCompiler: Sync + Send {
     /// Enumerate the function calls that the given `func` makes.
-    fn calls(&self, func: &CompiledFunctionBody, calls: &mut IndexSet<FuncIndex>) -> Result<()>;
+    fn calls(&self, func: &CompiledFunctionBody, calls: &mut IndexSet<FuncKey>) -> Result<()>;
 
     /// Get the abstract size of the given function, for the purposes of
     /// inlining heuristics.
@@ -483,7 +475,7 @@ pub trait InliningCompiler: Sync + Send {
     fn inline<'a>(
         &self,
         func: &mut CompiledFunctionBody,
-        get_callee: &'a mut dyn FnMut(FuncIndex) -> Option<&'a CompiledFunctionBody>,
+        get_callee: &'a mut dyn FnMut(FuncKey) -> Option<&'a CompiledFunctionBody>,
     ) -> Result<()>;
 
     /// Finish compiling the given function.

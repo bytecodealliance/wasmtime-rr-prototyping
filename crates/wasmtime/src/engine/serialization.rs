@@ -95,25 +95,13 @@ pub fn check_compatible(engine: &Engine, mmap: &[u8], expected: ObjectKind) -> R
     };
 
     match &engine.config().module_version {
-        ModuleVersionStrategy::WasmtimeVersion => {
-            let version = core::str::from_utf8(version)?;
-            if version != env!("CARGO_PKG_VERSION") {
-                bail!(
-                    "Module was compiled with incompatible Wasmtime version '{}'",
-                    version
-                );
-            }
-        }
-        ModuleVersionStrategy::Custom(v) => {
-            let version = core::str::from_utf8(&version)?;
-            if version != v {
-                bail!(
-                    "Module was compiled with incompatible version '{}'",
-                    version
-                );
-            }
-        }
         ModuleVersionStrategy::None => { /* ignore the version info, accept all */ }
+        _ => {
+            let version = core::str::from_utf8(&version)?;
+            if version != engine.config().module_version.as_str() {
+                bail!("Module was compiled with incompatible version '{version}'");
+            }
+        }
     }
     postcard::from_bytes::<Metadata<'_>>(data)?.check_compatible(engine)
 }
@@ -248,10 +236,7 @@ impl Metadata<'_> {
         }
 
         bail!(
-            "Module was compiled with a {} of '{}' but '{}' is expected for the host",
-            feature,
-            found,
-            expected
+            "Module was compiled with a {feature} of '{found}' but '{expected}' is expected for the host"
         );
     }
 
@@ -273,7 +258,8 @@ impl Metadata<'_> {
             collector,
             memory_reservation,
             memory_guard_size,
-            generate_native_debuginfo,
+            debug_native,
+            debug_guest,
             parse_wasm_debuginfo,
             consume_fuel,
             epoch_interruption,
@@ -314,10 +300,11 @@ impl Metadata<'_> {
             "memory guard size",
         )?;
         Self::check_bool(
-            generate_native_debuginfo,
-            other.generate_native_debuginfo,
-            "debug information support",
+            debug_native,
+            other.debug_native,
+            "native debug information support",
         )?;
+        Self::check_bool(debug_guest, other.debug_guest, "guest debug")?;
         Self::check_bool(
             parse_wasm_debuginfo,
             other.parse_wasm_debuginfo,
@@ -372,63 +359,17 @@ impl Metadata<'_> {
         Ok(())
     }
 
-    fn check_cfg_bool(
-        cfg: bool,
-        cfg_str: &str,
-        found: bool,
-        expected: bool,
-        feature: impl fmt::Display,
-    ) -> Result<()> {
-        if cfg {
-            Self::check_bool(found, expected, feature)
-        } else {
-            assert!(!expected);
-            ensure!(
-                !found,
-                "Module was compiled with {feature} but support in the host \
-                 was disabled at compile time because the `{cfg_str}` Cargo \
-                 feature was not enabled",
-            );
-            Ok(())
-        }
-    }
-
     fn check_features(&mut self, other: &wasmparser::WasmFeatures) -> Result<()> {
         let module_features = wasmparser::WasmFeatures::from_bits_truncate(self.features);
-        let difference = *other ^ module_features;
-        for (name, flag) in difference.iter_names() {
-            let found = module_features.contains(flag);
-            let expected = other.contains(flag);
-            // Give a slightly more specialized error message for the `GC_TYPES`
-            // feature which isn't actually part of wasm itself but is gated by
-            // compile-time crate features.
-            if flag == wasmparser::WasmFeatures::GC_TYPES {
-                Self::check_cfg_bool(
-                    cfg!(feature = "gc"),
-                    "gc",
-                    found,
-                    expected,
-                    WasmFeature(name),
-                )?;
-            } else {
-                Self::check_bool(found, expected, WasmFeature(name))?;
-            }
+        let missing_features = (*other & module_features) ^ module_features;
+        for (name, _) in missing_features.iter_names() {
+            let name = name.to_ascii_lowercase();
+            bail!(
+                "Module was compiled with support for WebAssembly feature \
+                `{name}` but it is not enabled for the host",
+            );
         }
-
-        return Ok(());
-
-        struct WasmFeature<'a>(&'a str);
-
-        impl fmt::Display for WasmFeature<'_> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "support for WebAssembly feature `")?;
-                for c in self.0.chars().map(|c| c.to_lowercase()) {
-                    write!(f, "{c}")?;
-                }
-                write!(f, "`")?;
-                Ok(())
-            }
-        }
+        Ok(())
     }
 
     fn check_collector(
@@ -436,12 +377,11 @@ impl Metadata<'_> {
         host: Option<wasmtime_environ::Collector>,
     ) -> Result<()> {
         match (module, host) {
-            (None, None) => Ok(()),
+            // If the module doesn't require GC support it doesn't matter
+            // whether the host has GC support enabled or not.
+            (None, _) => Ok(()),
             (Some(module), Some(host)) if module == host => Ok(()),
 
-            (None, Some(_)) => {
-                bail!("module was compiled without GC but GC is enabled in the host")
-            }
             (Some(_), None) => {
                 bail!("module was compiled with GC however GC is disabled in the host")
             }
@@ -643,14 +583,9 @@ Caused by:
         let mut metadata = Metadata::new(&engine);
         metadata.features &= !wasmparser::WasmFeatures::THREADS.bits();
 
-        match metadata.check_compatible(&engine) {
-            Ok(_) => unreachable!(),
-            Err(e) => assert_eq!(
-                e.to_string(),
-                "Module was compiled without support for WebAssembly feature \
-                 `threads` but it is enabled for the host"
-            ),
-        }
+        // If a feature is disabled in the module and enabled in the host,
+        // that's always ok.
+        metadata.check_compatible(&engine)?;
 
         let mut config = Config::new();
         config.wasm_threads(false);
@@ -687,6 +622,8 @@ Caused by:
     #[test]
     #[cfg_attr(miri, ignore)]
     fn cache_accounts_for_opt_level() -> Result<()> {
+        let _ = env_logger::try_init();
+
         let td = TempDir::new()?;
         let config_path = td.path().join("config.toml");
         std::fs::write(

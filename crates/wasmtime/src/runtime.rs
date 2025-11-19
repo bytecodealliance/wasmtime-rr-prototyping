@@ -25,18 +25,16 @@
 // explanation of why truncation shouldn't be happening at runtime. This
 // situation should be pretty rare though.
 #![warn(clippy::cast_possible_truncation)]
-#![warn(
-    unsafe_op_in_unsafe_fn,
-    reason = "opt-in until the crate opts-in as a whole -- #11180"
-)]
 
 #[macro_use]
 pub(crate) mod func;
 
 pub(crate) mod code;
 pub(crate) mod code_memory;
-#[cfg(feature = "debug-builtins")]
+#[cfg(feature = "debug")]
 pub(crate) mod debug;
+#[cfg(feature = "gc")]
+pub(crate) mod exception;
 pub(crate) mod externals;
 #[cfg(feature = "async")]
 pub(crate) mod fiber;
@@ -47,6 +45,8 @@ pub(crate) mod limits;
 pub(crate) mod linker;
 pub(crate) mod memory;
 pub(crate) mod module;
+#[cfg(feature = "debug-builtins")]
+pub(crate) mod native_debug;
 pub(crate) mod resources;
 pub(crate) mod rr;
 pub(crate) mod store;
@@ -77,6 +77,10 @@ cfg_if::cfg_if! {
 }
 
 pub use code_memory::CodeMemory;
+#[cfg(feature = "debug")]
+pub use debug::*;
+#[cfg(feature = "gc")]
+pub use exception::*;
 pub use externals::*;
 pub use func::*;
 pub use gc::*;
@@ -104,7 +108,7 @@ pub use values::*;
 pub(crate) use uninhabited::*;
 
 #[cfg(feature = "pooling-allocator")]
-pub use vm::PoolConcurrencyLimitError;
+pub use vm::{PoolConcurrencyLimitError, PoolingAllocatorMetrics};
 
 #[cfg(feature = "profiling")]
 mod profiling;

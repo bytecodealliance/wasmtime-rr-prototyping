@@ -18,6 +18,7 @@ use wasmtime_environ::{CacheStore, CompilerBuilder, Setting, Tunables};
 struct Builder {
     tunables: Option<Tunables>,
     inner: IsaBuilder<CodegenResult<OwnedTargetIsa>>,
+    emit_debug_checks: bool,
     linkopts: LinkOptions,
     cache_store: Option<Arc<dyn CacheStore>>,
     clif_dir: Option<path::PathBuf>,
@@ -45,6 +46,7 @@ pub fn builder(triple: Option<Triple>) -> Result<Box<dyn CompilerBuilder>> {
         cache_store: None,
         clif_dir: None,
         wmemcheck: false,
+        emit_debug_checks: false,
     }))
 }
 
@@ -81,6 +83,9 @@ impl CompilerBuilder for Builder {
             "wasmtime_inlining_sum_size_threshold" => {
                 self.tunables.as_mut().unwrap().inlining_sum_size_threshold = value.parse()?;
             }
+            "wasmtime_debug_checks" => {
+                self.emit_debug_checks = true;
+            }
             _ => {
                 self.inner.set(name, value)?;
             }
@@ -97,6 +102,10 @@ impl CompilerBuilder for Builder {
         Ok(())
     }
 
+    fn tunables(&self) -> Option<&Tunables> {
+        self.tunables.as_ref()
+    }
+
     fn build(&self) -> Result<Box<dyn wasmtime_environ::Compiler>> {
         let isa = self.inner.build()?;
         Ok(Box::new(crate::compiler::Compiler::new(
@@ -106,6 +115,7 @@ impl CompilerBuilder for Builder {
                 .clone(),
             isa,
             self.cache_store.clone(),
+            self.emit_debug_checks,
             self.linkopts.clone(),
             self.clif_dir.clone(),
             self.wmemcheck,

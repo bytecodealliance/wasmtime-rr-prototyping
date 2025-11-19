@@ -2,6 +2,7 @@ use futures::join;
 use test_programs::p3::wasi::sockets::types::{
     IpAddress, IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, Ipv6SocketAddress, UdpSocket,
 };
+use test_programs::sockets::supports_ipv6;
 
 struct Component;
 
@@ -14,15 +15,15 @@ async fn test_udp_sample_application(family: IpAddressFamily, bind_address: IpSo
     let second_message = b"Hello, world!";
     let third_message = b"Greetings, planet!";
 
-    let server = UdpSocket::new(family);
+    let server = UdpSocket::create(family).unwrap();
 
     server.bind(bind_address).unwrap();
-    let addr = server.local_address().unwrap();
+    let addr = server.get_local_address().unwrap();
 
-    let client = UdpSocket::new(family);
+    let client = UdpSocket::create(family).unwrap();
     client.bind(unspecified_addr).unwrap();
     client.connect(addr).unwrap();
-    let client_addr = client.local_address().unwrap();
+    let client_addr = client.get_local_address().unwrap();
     join!(
         async {
             client.send(first_message.to_vec(), None).await.unwrap();
@@ -45,7 +46,7 @@ async fn test_udp_sample_application(family: IpAddressFamily, bind_address: IpSo
     join!(
         async {
             // Another client
-            let client = UdpSocket::new(family);
+            let client = UdpSocket::create(family).unwrap();
             client.bind(unspecified_addr).unwrap();
             client
                 .send(third_message.to_vec(), Some(addr))
@@ -70,16 +71,18 @@ impl test_programs::p3::exports::wasi::cli::run::Guest for Component {
             }),
         )
         .await;
-        test_udp_sample_application(
-            IpAddressFamily::Ipv6,
-            IpSocketAddress::Ipv6(Ipv6SocketAddress {
-                port: 0,                           // use any free port
-                address: (0, 0, 0, 0, 0, 0, 0, 1), // localhost
-                flow_info: 0,
-                scope_id: 0,
-            }),
-        )
-        .await;
+        if supports_ipv6() {
+            test_udp_sample_application(
+                IpAddressFamily::Ipv6,
+                IpSocketAddress::Ipv6(Ipv6SocketAddress {
+                    port: 0,                           // use any free port
+                    address: (0, 0, 0, 0, 0, 0, 0, 1), // localhost
+                    flow_info: 0,
+                    scope_id: 0,
+                }),
+            )
+            .await;
+        }
         Ok(())
     }
 }

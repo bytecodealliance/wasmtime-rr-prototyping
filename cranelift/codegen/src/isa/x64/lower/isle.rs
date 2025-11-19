@@ -24,7 +24,6 @@ use crate::machinst::{
 };
 use alloc::vec::Vec;
 use cranelift_assembler_x64 as asm;
-use cranelift_entity::{Signed, Unsigned};
 use regalloc2::PReg;
 use std::boxed::Box;
 
@@ -173,7 +172,7 @@ impl Context for IsleContext<'_, '_, MInst, X64Backend> {
         if let Some(imm) = self.i64_from_iconst(val) {
             if let Ok(imm) = i32::try_from(imm) {
                 return RegMemImm::Imm {
-                    simm32: imm.unsigned(),
+                    simm32: imm.cast_unsigned(),
                 };
             }
         }
@@ -185,7 +184,7 @@ impl Context for IsleContext<'_, '_, MInst, X64Backend> {
         if let Some(imm) = self.i64_from_iconst(val) {
             if let Ok(imm) = i32::try_from(imm) {
                 return XmmMemImm::unwrap_new(RegMemImm::Imm {
-                    simm32: imm.unsigned(),
+                    simm32: imm.cast_unsigned(),
                 });
             }
         }
@@ -245,88 +244,88 @@ impl Context for IsleContext<'_, '_, MInst, X64Backend> {
     }
 
     #[inline]
-    fn use_avx(&mut self) -> bool {
-        self.backend.x64_flags.use_avx()
+    fn has_avx(&mut self) -> bool {
+        self.backend.x64_flags.has_avx()
     }
 
     #[inline]
     fn use_avx2(&mut self) -> bool {
-        self.backend.x64_flags.use_avx2()
+        self.backend.x64_flags.has_avx() && self.backend.x64_flags.has_avx2()
     }
 
     #[inline]
-    fn use_avx512vl(&mut self) -> bool {
-        self.backend.x64_flags.use_avx512vl()
+    fn has_avx512vl(&mut self) -> bool {
+        self.backend.x64_flags.has_avx512vl()
     }
 
     #[inline]
-    fn use_avx512dq(&mut self) -> bool {
-        self.backend.x64_flags.use_avx512dq()
+    fn has_avx512dq(&mut self) -> bool {
+        self.backend.x64_flags.has_avx512dq()
     }
 
     #[inline]
-    fn use_avx512f(&mut self) -> bool {
-        self.backend.x64_flags.use_avx512f()
+    fn has_avx512f(&mut self) -> bool {
+        self.backend.x64_flags.has_avx512f()
     }
 
     #[inline]
-    fn use_avx512bitalg(&mut self) -> bool {
-        self.backend.x64_flags.use_avx512bitalg()
+    fn has_avx512bitalg(&mut self) -> bool {
+        self.backend.x64_flags.has_avx512bitalg()
     }
 
     #[inline]
-    fn use_avx512vbmi(&mut self) -> bool {
-        self.backend.x64_flags.use_avx512vbmi()
+    fn has_avx512vbmi(&mut self) -> bool {
+        self.backend.x64_flags.has_avx512vbmi()
     }
 
     #[inline]
-    fn use_lzcnt(&mut self) -> bool {
-        self.backend.x64_flags.use_lzcnt()
+    fn has_lzcnt(&mut self) -> bool {
+        self.backend.x64_flags.has_lzcnt()
     }
 
     #[inline]
-    fn use_bmi1(&mut self) -> bool {
-        self.backend.x64_flags.use_bmi1()
+    fn has_bmi1(&mut self) -> bool {
+        self.backend.x64_flags.has_bmi1()
     }
 
     #[inline]
-    fn use_bmi2(&mut self) -> bool {
-        self.backend.x64_flags.use_bmi2()
+    fn has_bmi2(&mut self) -> bool {
+        self.backend.x64_flags.has_bmi2()
     }
 
     #[inline]
     fn use_popcnt(&mut self) -> bool {
-        self.backend.x64_flags.use_popcnt()
+        self.backend.x64_flags.has_popcnt() && self.backend.x64_flags.has_sse42()
     }
 
     #[inline]
     fn use_fma(&mut self) -> bool {
-        self.backend.x64_flags.use_fma()
+        self.backend.x64_flags.has_avx() && self.backend.x64_flags.has_fma()
     }
 
     #[inline]
-    fn use_sse3(&mut self) -> bool {
-        self.backend.x64_flags.use_sse3()
+    fn has_sse3(&mut self) -> bool {
+        self.backend.x64_flags.has_sse3()
     }
 
     #[inline]
-    fn use_ssse3(&mut self) -> bool {
-        self.backend.x64_flags.use_ssse3()
+    fn has_ssse3(&mut self) -> bool {
+        self.backend.x64_flags.has_ssse3()
     }
 
     #[inline]
-    fn use_sse41(&mut self) -> bool {
-        self.backend.x64_flags.use_sse41()
+    fn has_sse41(&mut self) -> bool {
+        self.backend.x64_flags.has_sse41()
     }
 
     #[inline]
     fn use_sse42(&mut self) -> bool {
-        self.backend.x64_flags.use_sse42()
+        self.backend.x64_flags.has_sse41() && self.backend.x64_flags.has_sse42()
     }
 
     #[inline]
-    fn use_cmpxchg16b(&mut self) -> bool {
-        self.backend.x64_flags.use_cmpxchg16b()
+    fn has_cmpxchg16b(&mut self) -> bool {
+        self.backend.x64_flags.has_cmpxchg16b()
     }
 
     #[inline]
@@ -344,7 +343,7 @@ impl Context for IsleContext<'_, '_, MInst, X64Backend> {
     fn simm32_from_value(&mut self, val: Value) -> Option<GprMemImm> {
         let imm = self.i64_from_iconst(val)?;
         Some(GprMemImm::unwrap_new(RegMemImm::Imm {
-            simm32: i32::try_from(imm).ok()?.unsigned(),
+            simm32: i32::try_from(imm).ok()?.cast_unsigned(),
         }))
     }
 
@@ -408,6 +407,11 @@ impl Context for IsleContext<'_, '_, MInst, X64Backend> {
     #[inline]
     fn amode_to_synthetic_amode(&mut self, amode: &Amode) -> SyntheticAmode {
         amode.clone().into()
+    }
+
+    #[inline]
+    fn synthetic_amode_slot(&mut self, offset: i32) -> SyntheticAmode {
+        SyntheticAmode::SlotOffset { simm32: offset }
     }
 
     #[inline]
@@ -634,7 +638,7 @@ impl Context for IsleContext<'_, '_, MInst, X64Backend> {
     }
 
     #[inline]
-    fn amode_offset(&mut self, addr: &Amode, offset: i32) -> Amode {
+    fn amode_offset(&mut self, addr: &SyntheticAmode, offset: i32) -> SyntheticAmode {
         addr.offset(offset)
     }
 
@@ -975,35 +979,41 @@ impl Context for IsleContext<'_, '_, MInst, X64Backend> {
 
     fn is_imm8(&mut self, src: &GprMemImm) -> Option<u8> {
         match src.clone().to_reg_mem_imm() {
-            RegMemImm::Imm { simm32 } => Some(i8::try_from(simm32.signed()).ok()?.unsigned()),
+            RegMemImm::Imm { simm32 } => {
+                Some(i8::try_from(simm32.cast_signed()).ok()?.cast_unsigned())
+            }
             _ => None,
         }
     }
 
     fn is_imm8_xmm(&mut self, src: &XmmMemImm) -> Option<u8> {
         match src.clone().to_reg_mem_imm() {
-            RegMemImm::Imm { simm32 } => Some(i8::try_from(simm32.signed()).ok()?.unsigned()),
+            RegMemImm::Imm { simm32 } => {
+                Some(i8::try_from(simm32.cast_signed()).ok()?.cast_unsigned())
+            }
             _ => None,
         }
     }
 
     fn is_simm8(&mut self, src: &GprMemImm) -> Option<i8> {
         match src.clone().to_reg_mem_imm() {
-            RegMemImm::Imm { simm32 } => Some(i8::try_from(simm32.signed()).ok()?),
+            RegMemImm::Imm { simm32 } => Some(i8::try_from(simm32.cast_signed()).ok()?),
             _ => None,
         }
     }
 
     fn is_imm16(&mut self, src: &GprMemImm) -> Option<u16> {
         match src.clone().to_reg_mem_imm() {
-            RegMemImm::Imm { simm32 } => Some(i16::try_from(simm32.signed()).ok()?.unsigned()),
+            RegMemImm::Imm { simm32 } => {
+                Some(i16::try_from(simm32.cast_signed()).ok()?.cast_unsigned())
+            }
             _ => None,
         }
     }
 
     fn is_simm16(&mut self, src: &GprMemImm) -> Option<i16> {
         match src.clone().to_reg_mem_imm() {
-            RegMemImm::Imm { simm32 } => Some(i16::try_from(simm32.signed()).ok()?),
+            RegMemImm::Imm { simm32 } => Some(i16::try_from(simm32.cast_signed()).ok()?),
             _ => None,
         }
     }

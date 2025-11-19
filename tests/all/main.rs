@@ -7,12 +7,15 @@ mod async_functions;
 mod call_hook;
 mod cli_tests;
 mod code_too_large;
+mod compile_time_builtins;
 mod component_model;
 mod coredump;
 mod custom_code_memory;
 mod debug;
 mod defaults;
 mod epoch_interruption;
+mod eqref;
+mod exceptions;
 mod exnrefs;
 mod externals;
 mod fuel;
@@ -26,6 +29,7 @@ mod iloop;
 mod import_calling_export;
 mod import_indexes;
 mod instance;
+mod intrinsics;
 mod invoke_func_via_table;
 mod limits;
 mod linker;
@@ -34,6 +38,7 @@ mod memory_creator;
 mod module;
 mod module_serialize;
 mod name;
+mod native_debug;
 mod noextern;
 mod piped_tests;
 mod pooling_allocator;
@@ -50,7 +55,6 @@ mod threads;
 mod traps;
 mod types;
 mod wait_notify;
-mod wasi_testsuite;
 mod winch_engine_features;
 
 /// A helper to compile a module in a new store with reference types enabled.
@@ -103,7 +107,7 @@ pub(crate) fn small_pool_config() -> wasmtime::PoolingAllocationConfig {
     // When testing, we may choose to start with MPK force-enabled to ensure
     // we use that functionality.
     if std::env::var("WASMTIME_TEST_FORCE_MPK").is_ok() {
-        config.memory_protection_keys(wasmtime::MpkEnabled::Enable);
+        config.memory_protection_keys(wasmtime::Enabled::No);
     }
 
     config.total_stacks(1);

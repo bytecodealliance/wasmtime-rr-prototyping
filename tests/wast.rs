@@ -1,9 +1,7 @@
 use anyhow::{Context, bail};
 use libtest_mimic::{Arguments, FormatSetting, Trial};
 use std::sync::{Condvar, LazyLock, Mutex};
-use wasmtime::{
-    Config, Engine, InstanceAllocationStrategy, MpkEnabled, PoolingAllocationConfig, Store,
-};
+use wasmtime::{Config, Enabled, Engine, InstanceAllocationStrategy, PoolingAllocationConfig};
 use wasmtime_test_util::wast::{Collector, Compiler, WastConfig, WastTest, limits};
 use wasmtime_wast::{Async, SpectestConfig, WastContext};
 
@@ -13,7 +11,7 @@ fn main() {
     let tests = if cfg!(miri) {
         Vec::new()
     } else {
-        wasmtime_test_util::wast::find_tests(".".as_ref()).unwrap()
+        wasmtime_test_util::wast::find_tests(env!("CARGO_MANIFEST_DIR").as_ref()).unwrap()
     };
 
     let mut trials = Vec::new();
@@ -48,6 +46,12 @@ fn main() {
     ];
     compilers.retain(|c| c.supports_host());
 
+    // Only test one compiler in ASAN since we're mostly interested in testing
+    // runtime code, not compiler-generated code.
+    if cfg!(asan) {
+        compilers.truncate(1);
+    }
+
     // Run each wast test in a few interesting configuration combinations, but
     // leave the full combinatorial matrix and such to fuzz testing which
     // configures many more settings than those configured here.
@@ -68,6 +72,12 @@ fn main() {
                     collector,
                 },
             );
+        }
+
+        // Don't do extra tests in ASAN as it takes awhile and is unlikely to
+        // reap much benefit.
+        if cfg!(asan) {
+            continue;
         }
 
         let compiler = compilers[0];
@@ -136,6 +146,7 @@ fn run_wast(test: &WastTest, config: WastConfig) -> anyhow::Result<()> {
 
     if is_cranelift {
         cfg.cranelift_debug_verifier(true);
+        cfg.cranelift_wasmtime_debug_checks(true);
     }
 
     // By default we'll allocate huge chunks (6gb) of the address space for each
@@ -213,7 +224,7 @@ fn run_wast(test: &WastTest, config: WastConfig) -> anyhow::Result<()> {
         // When testing, we may choose to start with MPK force-enabled to ensure
         // we use that functionality.
         if std::env::var("WASMTIME_TEST_FORCE_MPK").is_ok() {
-            pool.memory_protection_keys(MpkEnabled::Enable);
+            pool.memory_protection_keys(Enabled::Yes);
         }
 
         cfg.allocation_strategy(InstanceAllocationStrategy::Pooling(pool));
@@ -236,8 +247,7 @@ fn run_wast(test: &WastTest, config: WastConfig) -> anyhow::Result<()> {
 
     for (engine, desc) in engines {
         let result = engine.and_then(|engine| {
-            let store = Store::new(&engine, ());
-            let mut wast_context = WastContext::new(store, Async::Yes);
+            let mut wast_context = WastContext::new(&engine, Async::Yes, |_store| {});
             wast_context.generate_dwarf(true);
             wast_context.register_spectest(&SpectestConfig {
                 use_shared_memory: true,

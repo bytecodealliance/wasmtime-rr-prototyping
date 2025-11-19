@@ -109,6 +109,14 @@ pub trait MachInst: Clone + Debug {
     /// Is this an "args" pseudoinst?
     fn is_args(&self) -> bool;
 
+    /// Classify the type of call instruction this is.
+    ///
+    /// This enables more granular function type analysis and optimization.
+    /// Returns `CallType::None` for non-call instructions, `CallType::Regular`
+    /// for normal calls that return to the caller, and `CallType::TailCall`
+    /// for tail calls that don't return to the caller.
+    fn call_type(&self) -> CallType;
+
     /// Should this instruction's clobber-list be included in the
     /// clobber-set?
     fn is_included_in_clobbers(&self) -> bool;
@@ -265,6 +273,55 @@ pub trait MachInstLabelUse: Clone + Copy + Debug + Eq {
     fn from_reloc(reloc: Reloc, addend: Addend) -> Option<Self>;
 }
 
+/// Classification of call instruction types for granular analysis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallType {
+    /// Not a call instruction.
+    None,
+    /// Regular call that returns to the caller.
+    Regular,
+    /// Tail call that doesn't return to the caller.
+    TailCall,
+}
+
+/// Function classification based on call patterns.
+///
+/// This enum classifies functions based on their calling behavior to enable
+/// targeted optimizations. Functions are categorized as:
+/// - `None`: No calls at all (can use simplified calling conventions)
+/// - `TailOnly`: Only tail calls (may skip frame setup in some cases)
+/// - `Regular`: Has regular calls (requires full calling convention support)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FunctionCalls {
+    /// Function makes no calls at all.
+    #[default]
+    None,
+    /// Function only makes tail calls (no regular calls).
+    TailOnly,
+    /// Function makes at least one regular call (may also have tail calls).
+    Regular,
+}
+
+impl FunctionCalls {
+    /// Update the function classification based on a new call instruction.
+    ///
+    /// This method implements the merge logic for accumulating call patterns:
+    /// - Any regular call makes the function Regular
+    /// - Tail calls upgrade None to TailOnly
+    /// - Regular always stays Regular
+    pub fn update(&mut self, call_type: CallType) {
+        *self = match (*self, call_type) {
+            // No call instruction - state unchanged
+            (current, CallType::None) => current,
+            // Regular call always results in Regular classification
+            (_, CallType::Regular) => FunctionCalls::Regular,
+            // Tail call: None becomes TailOnly, others unchanged
+            (FunctionCalls::None, CallType::TailCall) => FunctionCalls::TailOnly,
+            (current, CallType::TailCall) => current,
+        };
+    }
+}
+
 /// Describes a block terminator (not call) in the VCode.
 ///
 /// Actual targets are not included: the single-source-of-truth for
@@ -332,16 +389,10 @@ pub trait MachInstEmitState<I: VCodeInst>: Default + Clone + Debug {
 pub struct CompiledCodeBase<T: CompilePhase> {
     /// Machine code.
     pub buffer: MachBufferFinalized<T>,
-    /// Size of stack frame, in bytes.
-    pub frame_size: u32,
     /// Disassembly, if requested.
     pub vcode: Option<String>,
     /// Debug info: value labels to registers/stackslots at code offsets.
     pub value_labels_ranges: ValueLabelsRanges,
-    /// Debug info: stackslots to stack pointer offsets.
-    pub sized_stackslot_offsets: PrimaryMap<StackSlot, u32>,
-    /// Debug info: stackslots to stack pointer offsets.
-    pub dynamic_stackslot_offsets: PrimaryMap<DynamicStackSlot, u32>,
     /// Basic-block layout info: block start offsets.
     ///
     /// This info is generated only if the `machine_code_cfg_info`
@@ -361,11 +412,8 @@ impl CompiledCodeStencil {
     pub fn apply_params(self, params: &FunctionParameters) -> CompiledCode {
         CompiledCode {
             buffer: self.buffer.apply_base_srcloc(params.base_srcloc()),
-            frame_size: self.frame_size,
             vcode: self.vcode,
             value_labels_ranges: self.value_labels_ranges,
-            sized_stackslot_offsets: self.sized_stackslot_offsets,
-            dynamic_stackslot_offsets: self.dynamic_stackslot_offsets,
             bb_starts: self.bb_starts,
             bb_edges: self.bb_edges,
         }
@@ -454,7 +502,7 @@ impl<T: CompilePhase> CompiledCodeBase<T> {
         return Ok(buf);
 
         fn map_caperr(err: capstone::Error) -> anyhow::Error {
-            anyhow::format_err!("{}", err)
+            anyhow::format_err!("{err}")
         }
     }
 }

@@ -2,6 +2,7 @@ use futures::join;
 use test_programs::p3::wasi::sockets::types::{
     ErrorCode, IpAddress, IpAddressFamily, IpSocketAddress, TcpSocket,
 };
+use test_programs::sockets::supports_ipv6;
 
 struct Component;
 
@@ -12,7 +13,7 @@ const SOME_PORT: u16 = 47; // If the tests pass, this will never actually be con
 /// `0.0.0.0` / `::` is not a valid remote address in WASI.
 async fn test_tcp_connect_unspec(family: IpAddressFamily) {
     let addr = IpSocketAddress::new(IpAddress::new_unspecified(family), SOME_PORT);
-    let sock = TcpSocket::new(family);
+    let sock = TcpSocket::create(family).unwrap();
 
     assert_eq!(sock.connect(addr).await, Err(ErrorCode::InvalidArgument));
 }
@@ -20,7 +21,7 @@ async fn test_tcp_connect_unspec(family: IpAddressFamily) {
 /// 0 is not a valid remote port.
 async fn test_tcp_connect_port_0(family: IpAddressFamily) {
     let addr = IpSocketAddress::new(IpAddress::new_loopback(family), 0);
-    let sock = TcpSocket::new(family);
+    let sock = TcpSocket::create(family).unwrap();
 
     assert_eq!(sock.connect(addr).await, Err(ErrorCode::InvalidArgument));
 }
@@ -33,7 +34,7 @@ async fn test_tcp_connect_wrong_family(family: IpAddressFamily) {
     };
     let remote_addr = IpSocketAddress::new(wrong_ip, SOME_PORT);
 
-    let sock = TcpSocket::new(family);
+    let sock = TcpSocket::create(family).unwrap();
 
     assert_eq!(
         sock.connect(remote_addr).await,
@@ -48,8 +49,8 @@ async fn test_tcp_connect_non_unicast() {
     let ipv6_multicast =
         IpSocketAddress::new(IpAddress::Ipv6((0xff00, 0, 0, 0, 0, 0, 0, 0)), SOME_PORT);
 
-    let sock_v4 = TcpSocket::new(IpAddressFamily::Ipv4);
-    let sock_v6 = TcpSocket::new(IpAddressFamily::Ipv6);
+    let sock_v4 = TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
+    let sock_v6 = TcpSocket::create(IpAddressFamily::Ipv6).unwrap();
 
     assert_eq!(
         sock_v4.connect(ipv4_broadcast).await,
@@ -67,17 +68,17 @@ async fn test_tcp_connect_non_unicast() {
 
 async fn test_tcp_connect_dual_stack() {
     // Set-up:
-    let v4_listener = TcpSocket::new(IpAddressFamily::Ipv4);
+    let v4_listener = TcpSocket::create(IpAddressFamily::Ipv4).unwrap();
     v4_listener
         .bind(IpSocketAddress::new(IpAddress::IPV4_LOOPBACK, 0))
         .unwrap();
     v4_listener.listen().unwrap();
 
-    let v4_listener_addr = v4_listener.local_address().unwrap();
+    let v4_listener_addr = v4_listener.get_local_address().unwrap();
     let v6_listener_addr =
         IpSocketAddress::new(IpAddress::IPV4_MAPPED_LOOPBACK, v4_listener_addr.port());
 
-    let v6_client = TcpSocket::new(IpAddressFamily::Ipv6);
+    let v6_client = TcpSocket::create(IpAddressFamily::Ipv6).unwrap();
 
     // Tests:
 
@@ -99,14 +100,14 @@ async fn test_tcp_connect_explicit_bind(family: IpAddressFamily) {
 
     let (listener, mut accept) = {
         let bind_address = IpSocketAddress::new(ip, 0);
-        let listener = TcpSocket::new(family);
+        let listener = TcpSocket::create(family).unwrap();
         listener.bind(bind_address).unwrap();
         let accept = listener.listen().unwrap();
         (listener, accept)
     };
 
-    let listener_address = listener.local_address().unwrap();
-    let client = TcpSocket::new(family);
+    let listener_address = listener.get_local_address().unwrap();
+    let client = TcpSocket::create(family).unwrap();
 
     // Manually bind the client:
     client.bind(IpSocketAddress::new(ip, 0)).unwrap();
@@ -125,20 +126,18 @@ async fn test_tcp_connect_explicit_bind(family: IpAddressFamily) {
 impl test_programs::p3::exports::wasi::cli::run::Guest for Component {
     async fn run() -> Result<(), ()> {
         test_tcp_connect_unspec(IpAddressFamily::Ipv4).await;
-        test_tcp_connect_unspec(IpAddressFamily::Ipv6).await;
-
         test_tcp_connect_port_0(IpAddressFamily::Ipv4).await;
-        test_tcp_connect_port_0(IpAddressFamily::Ipv6).await;
-
         test_tcp_connect_wrong_family(IpAddressFamily::Ipv4).await;
-        test_tcp_connect_wrong_family(IpAddressFamily::Ipv6).await;
-
-        test_tcp_connect_non_unicast().await;
-
-        test_tcp_connect_dual_stack().await;
-
         test_tcp_connect_explicit_bind(IpAddressFamily::Ipv4).await;
-        test_tcp_connect_explicit_bind(IpAddressFamily::Ipv6).await;
+
+        if supports_ipv6() {
+            test_tcp_connect_unspec(IpAddressFamily::Ipv6).await;
+            test_tcp_connect_port_0(IpAddressFamily::Ipv6).await;
+            test_tcp_connect_wrong_family(IpAddressFamily::Ipv6).await;
+            test_tcp_connect_non_unicast().await;
+            test_tcp_connect_dual_stack().await;
+            test_tcp_connect_explicit_bind(IpAddressFamily::Ipv6).await;
+        }
         Ok(())
     }
 }

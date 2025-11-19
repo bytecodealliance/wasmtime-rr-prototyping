@@ -32,7 +32,7 @@ wasm-encoder = { workspace = true }
 wasm-smith = { workspace = true, features = ['serde'] }
 wasm-mutate = { workspace = true }
 wasm-spec-interpreter = { path = "./wasm-spec-interpreter", optional = true }
-wasmi = { version = "0.43.1", default-features = false, features = ["std", "simd"] }
+wasmi = { version = "0.51.1", default-features = false, features = ["std", "simd"] }
 futures = { workspace = true }
 wasmtime-test-util = { workspace = true, features = ['wast', 'component-fuzz', 'component'] }
 serde_json = { workspace = true }
@@ -60,7 +60,7 @@ features = [
 # though, so we could use that if we wanted. For now though just simplify a bit
 # and don't depend on this on Windows.  The same applies on s390x and riscv.
 [target.'cfg(not(any(windows, target_arch = "s390x", target_arch = "riscv64")))'.dependencies]
-v8 = "137.2.0"
+v8 = "139.0.0"
 
 [dev-dependencies]
 wat = { workspace = true }

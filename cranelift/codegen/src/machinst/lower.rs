@@ -437,6 +437,10 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
                     try_call_rets.insert(inst, rets);
 
                     let mut payloads = smallvec![];
+                    // Note that this is intentionally using the calling
+                    // convention of the callee to determine what payload types
+                    // are available. The callee defines that, not the calling
+                    // convention of the caller.
                     for &ty in sig
                         .call_conv
                         .exception_payload_types(I::ABIMachineSpec::word_type())
@@ -869,6 +873,21 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
                 }
             }
 
+            // If the CLIF instruction had debug tags, copy them to
+            // the VCode. Place on all VCode instructions lowered from
+            // this CLIF instruction.
+            let debug_tags = self.f.debug_tags.get(inst);
+            if !debug_tags.is_empty() && self.vcode.vcode.num_insts() > 0 {
+                let end = self.vcode.vcode.num_insts();
+                for i in start..end {
+                    let backwards_index = BackwardsInsnIndex::new(i);
+                    log::trace!(
+                        "debug tags on {inst}; associating {debug_tags:?} with {backwards_index:?}"
+                    );
+                    self.vcode.add_debug_tags(backwards_index, debug_tags);
+                }
+            }
+
             // maybe insert random instruction
             if ctrl_plane.get_decision() {
                 if ctrl_plane.get_decision() {
@@ -1196,6 +1215,20 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
             ValueUseState::Unused => true,
             _ => false,
         }
+    }
+
+    pub fn block_successor_label(&self, block: Block, succ: usize) -> MachLabel {
+        trace!("block_successor_label: block {block} succ {succ}");
+        let lowered = self
+            .vcode
+            .block_order()
+            .lowered_index_for_block(block)
+            .expect("Unreachable block");
+        trace!(" -> lowered block {lowered:?}");
+        let (_, succs) = self.vcode.block_order().succ_indices(lowered);
+        trace!(" -> succs {succs:?}");
+        let succ_block = *succs.get(succ).expect("Successor index out of range");
+        MachLabel::from_block(succ_block)
     }
 }
 

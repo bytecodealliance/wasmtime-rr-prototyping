@@ -487,6 +487,7 @@ impl Iterator for ReplayBuffer {
                 }
                 Ok(event) => {
                     if let RREvent::Eof = &event {
+                        self.eof_encountered = true;
                         break 'event_loop None;
                     } else if event.is_marker() {
                         continue 'event_loop;
@@ -734,6 +735,7 @@ mod tests {
         };
         let events: Vec<BuiltinEntryEvent> = vec![
             BuiltinEntryEvent::ResourceDrop(ResourceDropEntryEvent {
+                caller_instance: 3,
                 resource: 42,
                 idx: 10,
             }),

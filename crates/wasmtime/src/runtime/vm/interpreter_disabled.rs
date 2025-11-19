@@ -51,4 +51,13 @@ impl InterpreterRef<'_> {
     ) -> bool {
         match self.empty {}
     }
+
+    pub(crate) unsafe fn resume_to_exception_handler(
+        &mut self,
+        _handler: &wasmtime_unwinder::Handler,
+        _payload1: usize,
+        _payload2: usize,
+    ) {
+        match self.empty {}
+    }
 }

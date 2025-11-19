@@ -463,10 +463,7 @@ impl WasmtimeOptionValue for wasmtime::OptLevel {
             "1" => Ok(wasmtime::OptLevel::Speed),
             "2" => Ok(wasmtime::OptLevel::Speed),
             "s" => Ok(wasmtime::OptLevel::SpeedAndSize),
-            other => bail!(
-                "unknown optimization level `{}`, only 0,1,2,s accepted",
-                other
-            ),
+            other => bail!("unknown optimization level `{other}`, only 0,1,2,s accepted"),
         }
     }
 
@@ -485,16 +482,17 @@ impl WasmtimeOptionValue for wasmtime::RegallocAlgorithm {
     fn parse(val: Option<&str>) -> Result<Self> {
         match String::parse(val)?.as_str() {
             "backtracking" => Ok(wasmtime::RegallocAlgorithm::Backtracking),
-            other => bail!(
-                "unknown regalloc algorithm`{}`, only backtracking,single-pass accepted",
-                other
-            ),
+            "single-pass" => Ok(wasmtime::RegallocAlgorithm::SinglePass),
+            other => {
+                bail!("unknown regalloc algorithm`{other}`, only backtracking,single-pass accepted")
+            }
         }
     }
 
     fn display(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             wasmtime::RegallocAlgorithm::Backtracking => f.write_str("backtracking"),
+            wasmtime::RegallocAlgorithm::SinglePass => f.write_str("single-pass"),
             _ => unreachable!(),
         }
     }
@@ -538,22 +536,22 @@ impl WasmtimeOptionValue for wasmtime::Collector {
     }
 }
 
-impl WasmtimeOptionValue for wasmtime::MpkEnabled {
+impl WasmtimeOptionValue for wasmtime::Enabled {
     const VAL_HELP: &'static str = "[=y|n|auto]";
     fn parse(val: Option<&str>) -> Result<Self> {
         match val {
-            None | Some("y") | Some("yes") | Some("true") => Ok(wasmtime::MpkEnabled::Enable),
-            Some("n") | Some("no") | Some("false") => Ok(wasmtime::MpkEnabled::Disable),
-            Some("auto") => Ok(wasmtime::MpkEnabled::Auto),
-            Some(s) => bail!("unknown mpk flag `{s}`, only yes,no,auto,<nothing> accepted"),
+            None | Some("y") | Some("yes") | Some("true") => Ok(wasmtime::Enabled::Yes),
+            Some("n") | Some("no") | Some("false") => Ok(wasmtime::Enabled::No),
+            Some("auto") => Ok(wasmtime::Enabled::Auto),
+            Some(s) => bail!("unknown flag `{s}`, only yes,no,auto,<nothing> accepted"),
         }
     }
 
     fn display(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
-            wasmtime::MpkEnabled::Enable => f.write_str("y"),
-            wasmtime::MpkEnabled::Disable => f.write_str("n"),
-            wasmtime::MpkEnabled::Auto => f.write_str("auto"),
+            wasmtime::Enabled::Yes => f.write_str("y"),
+            wasmtime::Enabled::No => f.write_str("n"),
+            wasmtime::Enabled::Auto => f.write_str("auto"),
         }
     }
 }

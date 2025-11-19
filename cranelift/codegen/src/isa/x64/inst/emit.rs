@@ -358,7 +358,7 @@ pub(crate) fn emit(
             //         sub  tmp_reg, guard_size * probe_count
             // .loop_start:
             //         sub  rsp, guard_size
-            //         mov  [rsp], rsp
+            //         mov  [rsp], 0
             //         cmp  rsp, tmp_reg
             //         jne  .loop_start
             //         add  rsp, guard_size * probe_count
@@ -383,11 +383,9 @@ pub(crate) fn emit(
                 .expect("`guard_size` is too large to fit in a 32-bit immediate");
             Inst::subq_mi(rsp, guard_size_).emit(sink, info, state);
 
-            // TODO: `mov [rsp], 0` would be better, but we don't have that instruction
-            // Probe the stack! We don't use Inst::gen_store_stack here because we need a predictable
-            // instruction size.
-            // mov  [rsp], rsp
-            asm::inst::movl_mr::new(Amode::imm_reg(0, regs::rsp()), Gpr::RSP)
+            // Touch the current page by storing an immediate zero.
+            // mov  [rsp], 0
+            asm::inst::movl_mi::new(Amode::imm_reg(0, regs::rsp()), 0i32.cast_unsigned())
                 .emit(sink, info, state);
 
             // Compare and jump if we are not done yet
@@ -428,7 +426,10 @@ pub(crate) fn emit(
             }
 
             if let Some(try_call) = call_info.try_call_info.as_ref() {
-                sink.add_try_call_site(try_call.exception_handlers(&state.frame_layout()));
+                sink.add_try_call_site(
+                    Some(state.frame_layout().sp_to_fp()),
+                    try_call.exception_handlers(&state.frame_layout()),
+                );
             } else {
                 sink.add_call_site();
             }
@@ -503,7 +504,10 @@ pub(crate) fn emit(
             }
 
             if let Some(try_call) = call_info.try_call_info.as_ref() {
-                sink.add_try_call_site(try_call.exception_handlers(&state.frame_layout()));
+                sink.add_try_call_site(
+                    Some(state.frame_layout().sp_to_fp()),
+                    try_call.exception_handlers(&state.frame_layout()),
+                );
             } else {
                 sink.add_call_site();
             }
@@ -1804,6 +1808,15 @@ pub(crate) fn emit(
             // Nothing.
         }
 
+        Inst::LabelAddress { dst, label } => {
+            // Emit an LEA with a LabelUse given this label.
+            asm::inst::leaq_rm::new(*dst, Amode::rip_relative(*label)).emit(sink, info, state);
+        }
+
+        Inst::SequencePoint { .. } => {
+            // Nothing.
+        }
+
         Inst::External { inst } => {
             let frame = state.frame_layout();
             emit_maybe_shrink(
@@ -2075,7 +2088,7 @@ fn emit_maybe_shrink(inst: &AsmInst, sink: &mut impl asm::CodeSink) {
             m32,
             sink,
             |dst, amode, s| leal_rm::<R>::new(dst, amode).encode(s),
-            |dst, simm32, s| addl_mi::<R>::new(dst, simm32.unsigned()).encode(s),
+            |dst, simm32, s| addl_mi::<R>::new(dst, simm32.cast_unsigned()).encode(s),
             |dst, reg, s| addl_rm::<R>::new(dst, reg).encode(s),
         ),
         Inst::leaq_rm(leaq_rm { r64, m64 }) => emit_lea(

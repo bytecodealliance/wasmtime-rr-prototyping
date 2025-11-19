@@ -1,17 +1,55 @@
-use cap_std::time::{Duration, Instant, SystemClock};
+use cap_std::time::{Duration, Instant, SystemClock, SystemTime};
 use cap_std::{AmbientAuthority, ambient_authority};
 use cap_time_ext::{MonotonicClockExt as _, SystemClockExt as _};
 use wasmtime::component::{HasData, ResourceTable};
 
-pub(crate) struct WasiClocks;
+/// A helper struct which implements [`HasData`] for the `wasi:clocks` APIs.
+///
+/// This can be useful when directly calling `add_to_linker` functions directly,
+/// such as [`wasmtime_wasi::p2::bindings::clocks::monotonic_clock::add_to_linker`] as
+/// the `D` type parameter. See [`HasData`] for more information about the type
+/// parameter's purpose.
+///
+/// When using this type you can skip the [`WasiClocksView`] trait, for
+/// example.
+///
+/// # Examples
+///
+/// ```
+/// use wasmtime::component::{Linker, ResourceTable};
+/// use wasmtime::{Engine, Result, Config};
+/// use wasmtime_wasi::clocks::*;
+///
+/// struct MyStoreState {
+///     table: ResourceTable,
+///     clocks: WasiClocksCtx,
+/// }
+///
+/// fn main() -> Result<()> {
+///     let mut config = Config::new();
+///     config.async_support(true);
+///     let engine = Engine::new(&config)?;
+///     let mut linker = Linker::new(&engine);
+///
+///     wasmtime_wasi::p2::bindings::clocks::monotonic_clock::add_to_linker::<MyStoreState, WasiClocks>(
+///         &mut linker,
+///         |state| WasiClocksCtxView {
+///             table: &mut state.table,
+///             ctx: &mut state.clocks,
+///         },
+///     )?;
+///     Ok(())
+/// }
+/// ```
+pub struct WasiClocks;
 
 impl HasData for WasiClocks {
     type Data<'a> = WasiClocksCtxView<'a>;
 }
 
 pub struct WasiClocksCtx {
-    pub wall_clock: Box<dyn HostWallClock + Send>,
-    pub monotonic_clock: Box<dyn HostMonotonicClock + Send>,
+    pub(crate) wall_clock: Box<dyn HostWallClock + Send>,
+    pub(crate) monotonic_clock: Box<dyn HostMonotonicClock + Send>,
 }
 
 impl Default for WasiClocksCtx {
@@ -121,4 +159,23 @@ pub fn monotonic_clock() -> Box<dyn HostMonotonicClock + Send> {
 
 pub fn wall_clock() -> Box<dyn HostWallClock + Send> {
     Box::new(WallClock::default())
+}
+
+pub(crate) struct Datetime {
+    pub seconds: u64,
+    pub nanoseconds: u32,
+}
+
+impl TryFrom<SystemTime> for Datetime {
+    type Error = wasmtime::Error;
+
+    fn try_from(time: SystemTime) -> Result<Self, Self::Error> {
+        let duration =
+            time.duration_since(SystemTime::from_std(std::time::SystemTime::UNIX_EPOCH))?;
+
+        Ok(Self {
+            seconds: duration.as_secs(),
+            nanoseconds: duration.subsec_nanos(),
+        })
+    }
 }

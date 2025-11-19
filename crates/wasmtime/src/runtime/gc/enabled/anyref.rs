@@ -5,7 +5,7 @@ use crate::prelude::*;
 use crate::runtime::vm::VMGcRef;
 use crate::{
     ArrayRef, ArrayType, AsContext, AsContextMut, EqRef, GcRefImpl, GcRootIndex, HeapType, I31,
-    ManuallyRooted, RefType, Result, Rooted, StructRef, StructType, ValRaw, ValType, WasmTy,
+    OwnedRooted, RefType, Result, Rooted, StructRef, StructType, ValRaw, ValType, WasmTy,
     store::{AutoAssertNoGc, StoreOpaque},
 };
 use core::mem;
@@ -23,7 +23,7 @@ use wasmtime_environ::VMGcKind;
 /// `0x12345678` into a reference, pretend it is a valid `anyref`, and trick the
 /// host into dereferencing it and segfaulting or worse.
 ///
-/// Note that you can also use `Rooted<AnyRef>` and `ManuallyRooted<AnyRef>` as
+/// Note that you can also use `Rooted<AnyRef>` and `OwnedRooted<AnyRef>` as
 /// a type parameter with [`Func::typed`][crate::Func::typed]- and
 /// [`Func::wrap`][crate::Func::wrap]-style APIs.
 ///
@@ -103,9 +103,9 @@ impl From<Rooted<EqRef>> for Rooted<AnyRef> {
     }
 }
 
-impl From<ManuallyRooted<EqRef>> for ManuallyRooted<AnyRef> {
+impl From<OwnedRooted<EqRef>> for OwnedRooted<AnyRef> {
     #[inline]
-    fn from(e: ManuallyRooted<EqRef>) -> Self {
+    fn from(e: OwnedRooted<EqRef>) -> Self {
         e.to_anyref()
     }
 }
@@ -117,9 +117,9 @@ impl From<Rooted<StructRef>> for Rooted<AnyRef> {
     }
 }
 
-impl From<ManuallyRooted<StructRef>> for ManuallyRooted<AnyRef> {
+impl From<OwnedRooted<StructRef>> for OwnedRooted<AnyRef> {
     #[inline]
-    fn from(s: ManuallyRooted<StructRef>) -> Self {
+    fn from(s: OwnedRooted<StructRef>) -> Self {
         s.to_anyref()
     }
 }
@@ -131,9 +131,9 @@ impl From<Rooted<ArrayRef>> for Rooted<AnyRef> {
     }
 }
 
-impl From<ManuallyRooted<ArrayRef>> for ManuallyRooted<AnyRef> {
+impl From<OwnedRooted<ArrayRef>> for OwnedRooted<AnyRef> {
     #[inline]
-    fn from(s: ManuallyRooted<ArrayRef>) -> Self {
+    fn from(s: OwnedRooted<ArrayRef>) -> Self {
         s.to_anyref()
     }
 }
@@ -280,11 +280,7 @@ impl AnyRef {
     // (Not actually memory unsafe since we have indexed GC heaps.)
     pub(crate) fn _from_raw(store: &mut AutoAssertNoGc, raw: u32) -> Option<Rooted<Self>> {
         let gc_ref = VMGcRef::from_raw_u32(raw)?;
-        let gc_ref = if gc_ref.is_i31() {
-            gc_ref.copy_i31()
-        } else {
-            store.unwrap_gc_store_mut().clone_gc_ref(&gc_ref)
-        };
+        let gc_ref = store.clone_gc_ref(&gc_ref);
         Some(Self::from_cloned_gc_ref(store, gc_ref))
     }
 
@@ -340,7 +336,7 @@ impl AnyRef {
         let raw = if gc_ref.is_i31() {
             gc_ref.as_raw_non_zero_u32()
         } else {
-            store.gc_store_mut()?.expose_gc_ref_to_wasm(gc_ref)
+            store.require_gc_store_mut()?.expose_gc_ref_to_wasm(gc_ref)
         };
         Ok(raw.get())
     }
@@ -364,7 +360,7 @@ impl AnyRef {
             return Ok(HeapType::I31);
         }
 
-        let header = store.gc_store()?.header(gc_ref);
+        let header = store.require_gc_store()?.header(gc_ref);
 
         if header.kind().matches(VMGcKind::ExternRef) {
             return Ok(HeapType::Any);
@@ -437,7 +433,11 @@ impl AnyRef {
     pub(crate) fn _is_eqref(&self, store: &StoreOpaque) -> Result<bool> {
         assert!(self.comes_from_same_store(store));
         let gc_ref = self.inner.try_gc_ref(store)?;
-        Ok(gc_ref.is_i31() || store.gc_store()?.kind(gc_ref).matches(VMGcKind::EqRef))
+        Ok(gc_ref.is_i31()
+            || store
+                .require_gc_store()?
+                .kind(gc_ref)
+                .matches(VMGcKind::EqRef))
     }
 
     /// Downcast this `anyref` to an `eqref`.
@@ -558,7 +558,11 @@ impl AnyRef {
 
     pub(crate) fn _is_struct(&self, store: &StoreOpaque) -> Result<bool> {
         let gc_ref = self.inner.try_gc_ref(store)?;
-        Ok(!gc_ref.is_i31() && store.gc_store()?.kind(gc_ref).matches(VMGcKind::StructRef))
+        Ok(!gc_ref.is_i31()
+            && store
+                .require_gc_store()?
+                .kind(gc_ref)
+                .matches(VMGcKind::StructRef))
     }
 
     /// Downcast this `anyref` to a `structref`.
@@ -622,7 +626,11 @@ impl AnyRef {
 
     pub(crate) fn _is_array(&self, store: &StoreOpaque) -> Result<bool> {
         let gc_ref = self.inner.try_gc_ref(store)?;
-        Ok(!gc_ref.is_i31() && store.gc_store()?.kind(gc_ref).matches(VMGcKind::ArrayRef))
+        Ok(!gc_ref.is_i31()
+            && store
+                .require_gc_store()?
+                .kind(gc_ref)
+                .matches(VMGcKind::ArrayRef))
     }
 
     /// Downcast this `anyref` to an `arrayref`.
@@ -746,7 +754,7 @@ unsafe impl WasmTy for Option<Rooted<AnyRef>> {
     }
 }
 
-unsafe impl WasmTy for ManuallyRooted<AnyRef> {
+unsafe impl WasmTy for OwnedRooted<AnyRef> {
     #[inline]
     fn valtype() -> ValType {
         ValType::Ref(RefType::new(false, HeapType::Any))
@@ -776,7 +784,7 @@ unsafe impl WasmTy for ManuallyRooted<AnyRef> {
     }
 }
 
-unsafe impl WasmTy for Option<ManuallyRooted<AnyRef>> {
+unsafe impl WasmTy for Option<OwnedRooted<AnyRef>> {
     #[inline]
     fn valtype() -> ValType {
         ValType::ANYREF
@@ -813,11 +821,11 @@ unsafe impl WasmTy for Option<ManuallyRooted<AnyRef>> {
     }
 
     fn store(self, store: &mut AutoAssertNoGc<'_>, ptr: &mut MaybeUninit<ValRaw>) -> Result<()> {
-        <ManuallyRooted<AnyRef>>::wasm_ty_option_store(self, store, ptr, ValRaw::anyref)
+        <OwnedRooted<AnyRef>>::wasm_ty_option_store(self, store, ptr, ValRaw::anyref)
     }
 
     unsafe fn load(store: &mut AutoAssertNoGc<'_>, ptr: &ValRaw) -> Self {
-        <ManuallyRooted<AnyRef>>::wasm_ty_option_load(
+        <OwnedRooted<AnyRef>>::wasm_ty_option_load(
             store,
             ptr.get_anyref(),
             AnyRef::from_cloned_gc_ref,

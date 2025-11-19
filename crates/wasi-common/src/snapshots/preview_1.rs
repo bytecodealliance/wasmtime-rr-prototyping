@@ -41,7 +41,6 @@ impl wiggle::GuestErrorType for types::Errno {
     }
 }
 
-#[wiggle::async_trait]
 impl wasi_snapshot_preview1::WasiSnapshotPreview1 for WasiCtx {
     async fn args_get(
         &mut self,
@@ -246,10 +245,10 @@ impl wasi_snapshot_preview1::WasiSnapshotPreview1 for WasiCtx {
         let fd = u32::from(fd);
         if table.is::<FileEntry>(fd) {
             let _file_entry: Arc<FileEntry> = table.get(fd)?;
-            Ok(())
+            Err(Error::not_supported())
         } else if table.is::<DirEntry>(fd) {
             let _dir_entry: Arc<DirEntry> = table.get(fd)?;
-            Ok(())
+            Err(Error::not_supported())
         } else {
             Err(Error::badf())
         }
@@ -578,6 +577,9 @@ impl wasi_snapshot_preview1::WasiSnapshotPreview1 for WasiCtx {
         let from = u32::from(from);
         let to = u32::from(to);
         if !table.contains_key(from) {
+            return Err(Error::badf());
+        }
+        if !table.contains_key(to) {
             return Err(Error::badf());
         }
         table.renumber(from, to)

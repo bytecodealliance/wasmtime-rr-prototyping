@@ -64,8 +64,7 @@ impl ObjectBuilder {
             }
             other => {
                 return Err(ModuleError::Backend(anyhow!(
-                    "binary format {} not recognized",
-                    other
+                    "binary format {other} not recognized"
                 )));
             }
         };
@@ -77,8 +76,7 @@ impl ObjectBuilder {
             target_lexicon::Architecture::Riscv64(_) => {
                 if binary_format != object::BinaryFormat::Elf {
                     return Err(ModuleError::Backend(anyhow!(
-                        "binary format {:?} is not supported for riscv64",
-                        binary_format,
+                        "binary format {binary_format:?} is not supported for riscv64",
                     )));
                 }
 
@@ -105,8 +103,7 @@ impl ObjectBuilder {
             target_lexicon::Architecture::S390x => object::Architecture::S390x,
             architecture => {
                 return Err(ModuleError::Backend(anyhow!(
-                    "target architecture {:?} is unsupported",
-                    architecture,
+                    "target architecture {architecture:?} is unsupported",
                 )));
             }
         };
@@ -187,8 +184,7 @@ fn validate_symbol(name: &str) -> ModuleResult<()> {
     // crate to panic. Let's return a clean error instead.
     if name.contains("\0") {
         return Err(ModuleError::Backend(anyhow::anyhow!(
-            "Symbol {:?} has a null byte, which is disallowed",
-            name
+            "Symbol {name:?} has a null byte, which is disallowed"
         )));
     }
     Ok(())
@@ -454,41 +450,15 @@ impl Module for ObjectModule {
 
         if used {
             match self.object.format() {
-                object::BinaryFormat::Elf => {
-                    let section = self.object.section_mut(section);
-                    match &mut section.flags {
-                        SectionFlags::None => {
-                            // Explicitly specify default flags as SectionFlags::Elf overwrites them
-                            let sh_flags = if decl.tls {
-                                elf::SHF_ALLOC | elf::SHF_WRITE | elf::SHF_TLS
-                            } else if decl.writable || !relocs.is_empty() {
-                                elf::SHF_ALLOC | elf::SHF_WRITE
-                            } else {
-                                elf::SHF_ALLOC
-                            };
-                            section.flags = SectionFlags::Elf {
-                                sh_flags: u64::from(sh_flags | elf::SHF_GNU_RETAIN),
-                            }
-                        }
-                        SectionFlags::Elf { sh_flags } => {
-                            *sh_flags |= u64::from(elf::SHF_GNU_RETAIN)
-                        }
-                        _ => unreachable!(),
-                    }
-                }
+                object::BinaryFormat::Elf => match self.object.section_flags_mut(section) {
+                    SectionFlags::Elf { sh_flags } => *sh_flags |= u64::from(elf::SHF_GNU_RETAIN),
+                    _ => unreachable!(),
+                },
                 object::BinaryFormat::Coff => {}
-                object::BinaryFormat::MachO => {
-                    let symbol = self.object.symbol_mut(symbol);
-                    assert!(matches!(symbol.flags, SymbolFlags::None));
-                    let n_desc = if decl.linkage == Linkage::Preemptible {
-                        object::macho::N_WEAK_DEF
-                    } else {
-                        0
-                    };
-                    symbol.flags = SymbolFlags::MachO {
-                        n_desc: n_desc | object::macho::N_NO_DEAD_STRIP,
-                    }
-                }
+                object::BinaryFormat::MachO => match self.object.symbol_flags_mut(symbol) {
+                    SymbolFlags::MachO { n_desc } => *n_desc |= object::macho::N_NO_DEAD_STRIP,
+                    _ => unreachable!(),
+                },
                 _ => unreachable!(),
             }
         }
@@ -562,6 +532,34 @@ impl ObjectModule {
 
     /// Finalize all relocations and output an object.
     pub fn finish(mut self) -> ObjectProduct {
+        if cfg!(debug_assertions) {
+            for (func_id, decl) in self.declarations.get_functions() {
+                if !decl.linkage.requires_definition() {
+                    continue;
+                }
+
+                assert!(
+                    self.functions[func_id].unwrap().1,
+                    "function \"{}\" with linkage {:?} must be defined but is not",
+                    decl.linkage_name(func_id),
+                    decl.linkage,
+                );
+            }
+
+            for (data_id, decl) in self.declarations.get_data_objects() {
+                if !decl.linkage.requires_definition() {
+                    continue;
+                }
+
+                assert!(
+                    self.data_objects[data_id].unwrap().1,
+                    "data object \"{}\" with linkage {:?} must be defined but is not",
+                    decl.linkage_name(data_id),
+                    decl.linkage,
+                );
+            }
+        }
+
         let symbol_relocs = mem::take(&mut self.relocs);
         for symbol in symbol_relocs {
             for &ObjectRelocRecord {

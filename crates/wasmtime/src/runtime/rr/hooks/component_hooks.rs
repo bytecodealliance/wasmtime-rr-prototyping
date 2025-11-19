@@ -5,7 +5,8 @@ use crate::component::func::LowerContext;
 use crate::rr::common_events::{HostFuncEntryEvent, WasmFuncReturnEvent};
 #[cfg(feature = "rr-component")]
 use crate::rr::component_events::{
-    LowerFlatReturnEvent, LowerMemoryReturnEvent, WasmFuncEntryEvent,
+    LowerFlatEntryEvent, LowerFlatReturnEvent, LowerMemoryEntryEvent, LowerMemoryReturnEvent,
+    WasmFuncEntryEvent,
 };
 #[cfg(feature = "rr-component")]
 use crate::rr::{RRFuncArgVals, ResultEvent, common_events::HostFuncReturnEvent};
@@ -20,6 +21,7 @@ use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 
 /// Indicator type signalling the context during lowering
 #[cfg(feature = "rr-component")]
+#[derive(Debug)]
 pub enum ReplayLoweringPhase {
     WasmFuncEntry,
     HostFuncReturn,
@@ -41,7 +43,7 @@ where
     let _ = (args, type_idx, &types);
     #[cfg(feature = "rr-component")]
     store.0.record_event(|| {
-        let flat_params = types.flat_types_storage(
+        let flat_params = types.flat_types_storage_or_pointer(
             &InterfaceType::Tuple(types[type_idx].params),
             MAX_FLAT_PARAMS,
         );
@@ -52,7 +54,7 @@ where
     let result = wasm_call(store);
     #[cfg(feature = "rr-component")]
     {
-        let flat_results = types.flat_types_storage(
+        let flat_results = types.flat_types_storage_or_pointer(
             &InterfaceType::Tuple(types[type_idx].results),
             MAX_FLAT_RESULTS,
         );
@@ -77,12 +79,12 @@ where
 pub fn record_validate_host_func_entry(
     args: &mut [MaybeUninit<ValRaw>],
     types: &Arc<ComponentTypes>,
-    type_idx: &TypeFuncIndex,
+    param_tys: &InterfaceType,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr-component")]
-    store.record_event_validation(|| create_host_func_entry_event(args, types, type_idx))?;
-    let _ = (args, types, type_idx, store);
+    store.record_event_validation(|| create_host_func_entry_event(args, types, param_tys))?;
+    let _ = (args, types, param_tys, store);
     Ok(())
 }
 
@@ -91,14 +93,14 @@ pub fn record_validate_host_func_entry(
 pub fn replay_validate_host_func_entry(
     args: &mut [MaybeUninit<ValRaw>],
     types: &Arc<ComponentTypes>,
-    type_idx: &TypeFuncIndex,
+    param_tys: &InterfaceType,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr-component")]
     store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| {
-        create_host_func_entry_event(args, types, type_idx)
+        create_host_func_entry_event(args, types, param_tys)
     })?;
-    let _ = (args, types, type_idx, store);
+    let _ = (args, types, param_tys, store);
     Ok(())
 }
 
@@ -112,7 +114,7 @@ pub fn record_host_func_return(
 ) -> Result<()> {
     #[cfg(feature = "rr-component")]
     store.record_event(|| {
-        let flat_results = types.flat_types_storage(&ty, MAX_FLAT_RESULTS);
+        let flat_results = types.flat_types_storage_or_pointer(&ty, MAX_FLAT_RESULTS);
         HostFuncReturnEvent {
             args: RRFuncArgVals::from_flat_storage(args, flat_results),
         }
@@ -133,12 +135,9 @@ where
     F: FnOnce(&mut LowerContext<'_, T>, InterfaceType, usize) -> Result<()>,
 {
     #[cfg(feature = "rr-component")]
-    {
-        use crate::rr::component_events::LowerMemoryEntryEvent;
-        cx.store
-            .0
-            .record_event_validation(|| LowerMemoryEntryEvent { ty, offset })?;
-    }
+    cx.store
+        .0
+        .record_event_validation(|| LowerMemoryEntryEvent { ty, offset })?;
     let store_result = lower_store(cx, ty, offset);
     #[cfg(feature = "rr-component")]
     cx.store
@@ -158,12 +157,9 @@ where
     F: FnOnce(&mut LowerContext<'_, T>, InterfaceType) -> Result<()>,
 {
     #[cfg(feature = "rr-component")]
-    {
-        use crate::rr::component_events::LowerFlatEntryEvent;
-        cx.store
-            .0
-            .record_event_validation(|| LowerFlatEntryEvent { ty })?;
-    }
+    cx.store
+        .0
+        .record_event_validation(|| LowerFlatEntryEvent { ty })?;
     let lower_result = lower(cx, ty);
     #[cfg(feature = "rr-component")]
     cx.store
@@ -177,12 +173,9 @@ where
 fn create_host_func_entry_event(
     args: &mut [MaybeUninit<ValRaw>],
     types: &Arc<ComponentTypes>,
-    type_idx: &TypeFuncIndex,
+    param_tys: &InterfaceType,
 ) -> HostFuncEntryEvent {
-    let flat_params = types.flat_types_storage(
-        &InterfaceType::Tuple(types[*type_idx].params),
-        MAX_FLAT_PARAMS,
-    );
+    let flat_params = types.flat_types_storage_or_pointer(param_tys, MAX_FLAT_PARAMS);
     HostFuncEntryEvent {
         args: RRFuncArgVals::from_flat_storage(args, flat_params),
     }

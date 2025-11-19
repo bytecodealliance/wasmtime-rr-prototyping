@@ -1,7 +1,7 @@
 use crate::prelude::*;
 #[cfg(feature = "std")]
 use crate::runtime::vm::open_file_for_mmap;
-use crate::runtime::vm::{CompiledModuleId, ModuleMemoryImages, VMWasmCallFunction};
+use crate::runtime::vm::{CompiledModuleId, MmapVec, ModuleMemoryImages, VMWasmCallFunction};
 use crate::sync::OnceLock;
 use crate::{
     Engine,
@@ -18,10 +18,14 @@ use core::ptr::NonNull;
 #[cfg(feature = "std")]
 use std::{fs::File, path::Path};
 use wasmparser::{Parser, ValidPayload, Validator};
+#[cfg(feature = "debug")]
+use wasmtime_environ::FrameTable;
 use wasmtime_environ::{
-    CompiledModuleInfo, EntityIndex, HostPtr, ModuleTypes, ObjectKind, TypeTrace, VMOffsets,
-    VMSharedTypeIndex,
+    CompiledFunctionsTable, CompiledModuleInfo, EntityIndex, HostPtr, ModuleTypes, ObjectKind,
+    TypeTrace, VMOffsets, VMSharedTypeIndex,
 };
+#[cfg(feature = "gc")]
+use wasmtime_unwinder::ExceptionTable;
 mod registry;
 
 pub use registry::*;
@@ -496,13 +500,13 @@ impl Module {
     pub(crate) fn from_parts(
         engine: &Engine,
         code_memory: Arc<CodeMemory>,
-        info_and_types: Option<(CompiledModuleInfo, ModuleTypes)>,
+        info_and_types: Option<(CompiledModuleInfo, CompiledFunctionsTable, ModuleTypes)>,
     ) -> Result<Self> {
         // Acquire this module's metadata and type information, deserializing
         // it from the provided artifact if it wasn't otherwise provided
         // already.
-        let (mut info, mut types) = match info_and_types {
-            Some((info, types)) => (info, types),
+        let (mut info, index, mut types) = match info_and_types {
+            Some((info, index, types)) => (info, index, types),
             None => postcard::from_bytes(code_memory.wasmtime_info())?,
         };
 
@@ -520,18 +524,24 @@ impl Module {
         // Package up all our data into a `CodeObject` and delegate to the final
         // step of module compilation.
         let code = Arc::new(CodeObject::new(code_memory, signatures, types.into()));
-        Module::from_parts_raw(engine, code, info, true)
+        let index = Arc::new(index);
+        Module::from_parts_raw(engine, code, info, index, true)
     }
 
     pub(crate) fn from_parts_raw(
         engine: &Engine,
         code: Arc<CodeObject>,
         info: CompiledModuleInfo,
+        index: Arc<CompiledFunctionsTable>,
         serializable: bool,
     ) -> Result<Self> {
         let checksum = info.checksum;
-        let module =
-            CompiledModule::from_artifacts(code.code_memory().clone(), info, engine.profiler())?;
+        let module = CompiledModule::from_artifacts(
+            code.code_memory().clone(),
+            info,
+            index,
+            engine.profiler(),
+        )?;
 
         // Validate the module can be used with the current instance allocator.
         let offsets = VMOffsets::new(HostPtr, module.module());
@@ -1118,6 +1128,7 @@ impl Module {
         let ptr = self
             .compiled_module()
             .wasm_to_array_trampoline(trampoline_module_ty)
+            .expect("always have a trampoline for the trampoline type")
             .as_ptr()
             .cast::<VMWasmCallFunction>()
             .cast_mut();
@@ -1128,17 +1139,43 @@ impl Module {
         let images = self
             .inner
             .memory_images
-            .get_or_try_init(|| memory_images(&self.inner.engine, &self.inner.module))?
+            .get_or_try_init(|| memory_images(&self.inner))?
             .as_ref();
         Ok(images)
+    }
+
+    /// Get the text offset (relative PC) for a given absolute PC in
+    /// this module.
+    #[cfg(any(feature = "gc", feature = "debug"))]
+    pub(crate) fn text_offset(&self, pc: usize) -> u32 {
+        u32::try_from(pc - self.inner.module.text().as_ptr() as usize).unwrap()
     }
 
     /// Lookup the stack map at a program counter value.
     #[cfg(feature = "gc")]
     pub(crate) fn lookup_stack_map(&self, pc: usize) -> Option<wasmtime_environ::StackMap<'_>> {
-        let text_offset = u32::try_from(pc - self.inner.module.text().as_ptr() as usize).unwrap();
+        let text_offset = self.text_offset(pc);
         let info = self.inner.code.code_memory().stack_map_data();
         wasmtime_environ::StackMap::lookup(text_offset, info)
+    }
+
+    /// Obtain an exception-table parser on this module's exception metadata.
+    #[cfg(feature = "gc")]
+    pub(crate) fn exception_table<'a>(&'a self) -> ExceptionTable<'a> {
+        ExceptionTable::parse(self.inner.code.code_memory().exception_tables())
+            .expect("Exception tables were validated on module load")
+    }
+
+    /// Obtain a frame-table parser on this module's frame state slot
+    /// (debug instrumentation) metadata.
+    #[cfg(feature = "debug")]
+    pub(crate) fn frame_table<'a>(&'a self) -> Option<FrameTable<'a>> {
+        let data = self.inner.code.code_memory().frame_tables();
+        if data.is_empty() {
+            None
+        } else {
+            Some(FrameTable::parse(data).expect("Frame tables were validated on module load"))
+        }
     }
 }
 
@@ -1178,21 +1215,30 @@ fn _assert_send_sync() {
 
 /// Helper method to construct a `ModuleMemoryImages` for an associated
 /// `CompiledModule`.
-fn memory_images(engine: &Engine, module: &CompiledModule) -> Result<Option<ModuleMemoryImages>> {
+fn memory_images(inner: &Arc<ModuleInner>) -> Result<Option<ModuleMemoryImages>> {
     // If initialization via copy-on-write is explicitly disabled in
     // configuration then this path is skipped entirely.
-    if !engine.tunables().memory_init_cow {
+    if !inner.engine.tunables().memory_init_cow {
         return Ok(None);
     }
 
     // ... otherwise logic is delegated to the `ModuleMemoryImages::new`
     // constructor.
-    let mmap = if engine.config().force_memory_init_memfd {
-        None
-    } else {
-        Some(module.mmap())
-    };
-    ModuleMemoryImages::new(module.module(), module.code_memory().wasm_data(), mmap)
+    ModuleMemoryImages::new(
+        &inner.engine,
+        inner.module.module(),
+        inner.code.code_memory(),
+    )
+}
+
+impl crate::vm::ModuleMemoryImageSource for CodeMemory {
+    fn wasm_data(&self) -> &[u8] {
+        <Self>::wasm_data(self)
+    }
+
+    fn mmap(&self) -> Option<&MmapVec> {
+        Some(<Self>::mmap(self))
+    }
 }
 
 #[cfg(test)]

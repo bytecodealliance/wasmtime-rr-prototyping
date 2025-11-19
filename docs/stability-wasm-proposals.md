@@ -26,7 +26,7 @@ The emoji legend is:
 | [`bulk-memory`]          | ✅      | ✅    | ✅       | ✅     | ✅  | ✅    |
 | [`reference-types`]      | ✅      | ✅    | ✅       | ✅     | ✅  | ✅    |
 | [`simd`]                 | ✅      | ✅    | ✅       | ✅     | ✅  | ✅    |
-| [`component-model`]      | ❌[^1]  | ✅    | ✅       | 🚧[^2] | ✅  | ❌[^5]|
+| [`component-model`]      | ❌[^1]  | ✅    | ✅       | 🚧[^2] | ✅  | 🚧[^5]|
 | [`relaxed-simd`]         | ✅      | ✅    | ✅       | ✅     | ✅  | ✅    |
 | [`multi-memory`]         | ✅      | ✅    | ✅       | ✅     | ✅  | ✅    |
 | [`threads`]              | ✅      | ✅    | ✅[^9]   | ❌[^3] | ✅  | ✅    |
@@ -40,24 +40,26 @@ The emoji legend is:
     lines of `wasm-smith` are not implemented for components.
 [^3]: Fuzzing with threads is an open implementation question that is expected
     to get fleshed out as the [`shared-everything-threads`] proposal advances.
-[^5]: Support for the C API for components is desired by many embedders but
-    does not currently have anyone lined up to implement it.
+[^5]: The component model is mostly supported in the C API but [gaps
+    remain][cm-capi-gaps].
 [^9]: There are [known
     issues](https://github.com/bytecodealliance/wasmtime/issues/4245) with
     shared memories and the implementation/API in Wasmtime, for example they
     aren't well integrated with resource-limiting features in `Store`.
     Additionally `shared` memories aren't supported in the pooling allocator.
 
+[cm-capi-gaps]: https://github.com/bytecodealliance/wasmtime/issues?q=is%3Aissue%20state%3Aopen%20label%3Awasm-proposal%3Acomponent-model%20label%3Awasmtime%3Ac-api
+
 ## Off-by-default proposals
 
-|  Proposal                   | Phase 4 | Tests | Finished | Fuzzed | API | C API |
-|-----------------------------|---------|-------|----------|--------|-----|-------|
-| [`function-references`]     | ✅      | ✅    | ✅       | 🚧     | ✅  | ❌    |
-| [`gc`] [^6]                 | ✅      | ✅    | 🚧[^7]   | 🚧[^8] | ✅  | ❌    |
-| [`wide-arithmetic`]         | ❌      | ✅    | ✅       | ✅     | ✅  | ✅    |
-| [`custom-page-sizes`]       | ❌      | ✅    | ✅       | ✅     | ✅  | ❌    |
-| [`exception-handling`] [^10]| ✅      | ❌    | 🚧       | ❌     | 🚧  | ❌    |
-| [`stack-switching`] [^11]   | ❌      | 🚧    | 🚧       | ❌     | ❌  | ❌    |
+|  Proposal                   | Phase 4 | Tests | Finished | Fuzzed | API | C API  |
+|-----------------------------|---------|-------|----------|--------|-----|--------|
+| [`function-references`]     | ✅      | ✅    | ✅       | 🚧     | ✅  | ❌     |
+| [`gc`] [^6]                 | ✅      | ✅    | 🚧[^7]   | 🚧[^8] | ✅  | ❌     |
+| [`wide-arithmetic`]         | ❌      | ✅    | ✅       | ✅     | ✅  | ✅     |
+| [`custom-page-sizes`]       | ❌      | ✅    | ✅       | ✅     | ✅  | ✅     |
+| [`exception-handling`]      | ✅      | ✅    | ✅       | 🚧[^11]| ✅  | 🚧[^12]|
+| [`stack-switching`] [^10]   | ❌      | 🚧    | 🚧       | ❌     | ❌  | ❌     |
 
 [^6]: There is also a [tracking
     issue](https://github.com/bytecodealliance/wasmtime/issues/5032) for the
@@ -70,11 +72,15 @@ The emoji legend is:
     whole-module fuzz targets like `differential`, but we would like to
     additionally [extend the `table_ops` fuzz target to exercise more of the GC
     proposal](https://github.com/bytecodealliance/wasmtime/issues/10327).
-[^10]: The exception-handling proposal is a work-in-progress being tracked
-    at [#3427](https://github.com/bytecodealliance/wasmtime/issues/3427)
-[^11]: The stack-switching proposal is a work-in-progress being tracked
+[^10]: The stack-switching proposal is a work-in-progress being tracked
     at [#9465](https://github.com/bytecodealliance/wasmtime/issues/9465).
     Currently the implementation is only for x86\_64 Linux.
+[^11]: The exception-handling proposal is fuzzed by our whole-module fuzzer,
+       but we do not have an exception-specific fuzzer that attempts to create
+       interesting throw/catch patterns or payloads.
+[^12]: The exception-handling proposal can be enabled for exceptions in the guest
+       via the C API, but exception objects have no C API to examine, clone,
+       rethrow, or drop exceptions that propagate to the host.
 
 ## Unimplemented proposals
 

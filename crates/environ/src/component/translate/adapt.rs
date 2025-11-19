@@ -174,6 +174,9 @@ pub struct AdapterOptions {
     pub post_return: Option<dfg::CoreDef>,
     /// Whether to use the async ABI for lifting or lowering.
     pub async_: bool,
+    /// Whether or not this intrinsic can consume a task cancellation
+    /// notification.
+    pub cancellable: bool,
     /// The core function type that is being lifted from / lowered to.
     pub core_type: ModuleInternedTypeIndex,
     /// The data model used by this adapter: linear memory or GC objects.
@@ -231,10 +234,12 @@ impl<'data> Translator<'_, 'data> {
             // likely to use that if anything is actually indirected through
             // memory.
             self.validator.reset();
+            let static_module_index = self.static_modules.next_key();
             let translation = ModuleEnvironment::new(
                 self.tunables,
                 &mut self.validator,
                 self.types.module_types_builder(),
+                static_module_index,
             )
             .translate(Parser::new(0), wasm)
             .expect("invalid adapter module generated");
@@ -242,7 +247,7 @@ impl<'data> Translator<'_, 'data> {
             // Record, for each adapter in this adapter module, the module that
             // the adapter was placed within as well as the function index of
             // the adapter in the wasm module generated. Note that adapters are
-            // paritioned in-order so we're guaranteed to push the adapters
+            // partitioned in-order so we're guaranteed to push the adapters
             // in-order here as well. (with an assert to double-check)
             for (adapter, name) in adapter_module.adapters.iter().zip(&names) {
                 let index = translation.module.exports[name];
@@ -260,8 +265,9 @@ impl<'data> Translator<'_, 'data> {
                 .zip(translation.module.imports())
                 .map(|(arg, (_, _, ty))| fact_import_to_core_def(component, arg, ty))
                 .collect::<Vec<_>>();
-            let static_index = self.static_modules.push(translation);
-            let id = component.adapter_modules.push((static_index, args));
+            let static_module_index2 = self.static_modules.push(translation);
+            assert_eq!(static_module_index, static_module_index2);
+            let id = component.adapter_modules.push((static_module_index, args));
             assert_eq!(id, module_id);
         }
     }
@@ -442,7 +448,9 @@ impl PartitionAdapterModules {
             }
 
             // These items can't transitively depend on an adapter
-            dfg::CoreDef::Trampoline(_) | dfg::CoreDef::InstanceFlags(_) => {}
+            dfg::CoreDef::Trampoline(_)
+            | dfg::CoreDef::InstanceFlags(_)
+            | dfg::CoreDef::UnsafeIntrinsic(..) => {}
         }
     }
 

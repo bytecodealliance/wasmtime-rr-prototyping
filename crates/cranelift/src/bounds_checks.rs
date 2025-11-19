@@ -31,7 +31,6 @@ use cranelift_codegen::{
     ir::{Expr, Fact},
 };
 use cranelift_frontend::FunctionBuilder;
-use wasmtime_environ::Unsigned;
 
 /// The kind of bounds check to perform when accessing a Wasm linear memory or
 /// GC heap.
@@ -403,6 +402,7 @@ fn bounds_check_field_access(
     if can_use_virtual_memory
         && heap.memory.minimum_byte_size().unwrap_or(u64::MAX) <= memory_reservation
         && !heap.memory.memory_may_move(env.tunables())
+        && memory_reservation >= offset_and_size
     {
         let adjusted_bound = memory_reservation.checked_sub(offset_and_size).unwrap();
         let adjusted_bound_value = builder
@@ -961,7 +961,7 @@ fn statically_in_bounds(
                 _ => return None,
             };
             let ty = func.dfg.value_type(index);
-            let index = imm.zero_extend_from_width(ty.bits()).bits().unsigned();
+            let index = imm.zero_extend_from_width(ty.bits()).bits().cast_unsigned();
             let final_addr = index.checked_add(offset_and_size)?;
             Some(final_addr <= heap.memory.minimum_byte_size().unwrap_or(u64::MAX))
         })

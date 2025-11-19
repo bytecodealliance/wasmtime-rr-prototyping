@@ -95,7 +95,7 @@ fn host_always_has_some_stack() -> Result<()> {
     // Additionally, however, and this is the crucial test, make sure that the
     // host function actually completed. If HITS is 1 then we entered but didn't
     // exit meaning we segfaulted while executing the host, yet still tried to
-    // recover from it with longjmp.
+    // recover from it with a jump.
     assert_eq!(hits1, 0);
     assert_eq!(hits2, 0);
     assert_eq!(hits3, 0);
@@ -122,6 +122,11 @@ fn host_always_has_some_stack() -> Result<()> {
 
 #[wasmtime_test]
 fn big_stack_works_ok(config: &mut Config) -> Result<()> {
+    // This test takes 1m+ in ASAN and isn't too useful, so prune it.
+    if cfg!(asan) {
+        return Ok(());
+    }
+
     const N: usize = 10000;
 
     // Build a module with a function that uses a very large amount of stack space,
@@ -147,6 +152,7 @@ fn big_stack_works_ok(config: &mut Config) -> Result<()> {
     // Disable cranelift optimizations to ensure that this test doesn't take too
     // long in debug mode due to the large size of its code.
     config.cranelift_opt_level(OptLevel::None);
+    config.cranelift_regalloc_algorithm(RegallocAlgorithm::SinglePass);
     let engine = Engine::new(config)?;
 
     let mut store = Store::new(&engine, ());

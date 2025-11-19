@@ -1,12 +1,19 @@
-use crate::runtime::vm::TableElement;
 use crate::store::{AutoAssertNoGc, StoreOpaque};
 use crate::{
     AnyRef, ArrayRef, AsContext, AsContextMut, ExnRef, ExternRef, Func, HeapType, RefType, Rooted,
-    RootedGcRefImpl, StructRef, V128, ValType, prelude::*,
+    StructRef, V128, ValType, prelude::*,
 };
 use core::ptr;
+use wasmtime_environ::WasmHeapTopType;
 
 pub use crate::runtime::vm::ValRaw;
+
+/// A stub implementation for continuation references.
+///
+/// This is a placeholder until continuation objects are fully integrated
+/// with the GC system (see #10248).
+#[derive(Debug, Clone, Copy)]
+pub struct ContRef;
 
 /// Possible runtime values that a WebAssembly module can either consume or
 /// produce.
@@ -50,6 +57,12 @@ pub enum Val {
 
     /// An exception reference.
     ExnRef(Option<Rooted<ExnRef>>),
+
+    /// A continuation reference.
+    ///
+    /// Note: This is currently a stub implementation as continuation objects
+    /// are not yet fully integrated with the GC system. See #10248.
+    ContRef(Option<ContRef>),
 }
 
 macro_rules! accessors {
@@ -112,6 +125,16 @@ impl Val {
         Val::AnyRef(None)
     }
 
+    pub(crate) const fn null_top(top: WasmHeapTopType) -> Val {
+        match top {
+            WasmHeapTopType::Func => Val::FuncRef(None),
+            WasmHeapTopType::Extern => Val::ExternRef(None),
+            WasmHeapTopType::Any => Val::AnyRef(None),
+            WasmHeapTopType::Exn => Val::ExnRef(None),
+            WasmHeapTopType::Cont => Val::ContRef(None),
+        }
+    }
+
     /// Returns the default value for the given type, if any exists.
     ///
     /// Returns `None` if there is no default value for the given type (for
@@ -167,6 +190,12 @@ impl Val {
             Val::AnyRef(Some(a)) => ValType::Ref(RefType::new(false, a._ty(store)?)),
             Val::ExnRef(None) => ValType::NULLEXNREF,
             Val::ExnRef(Some(e)) => ValType::Ref(RefType::new(false, e._ty(store)?.into())),
+            Val::ContRef(_) => {
+                // TODO(#10248): Return proper continuation reference type when available
+                return Err(anyhow::anyhow!(
+                    "continuation references not yet supported in embedder API"
+                ));
+            }
         })
     }
 
@@ -206,7 +235,8 @@ impl Val {
             | (Val::FuncRef(_), _)
             | (Val::ExternRef(_), _)
             | (Val::AnyRef(_), _)
-            | (Val::ExnRef(_), _) => false,
+            | (Val::ExnRef(_), _)
+            | (Val::ContRef(_), _) => false,
         })
     }
 
@@ -258,6 +288,12 @@ impl Val {
                 Some(f) => f.to_raw(store),
                 None => ptr::null_mut(),
             })),
+            Val::ContRef(_) => {
+                // TODO(#10248): Implement proper continuation reference to_raw conversion
+                Err(anyhow::anyhow!(
+                    "continuation references not yet supported in to_raw conversion"
+                ))
+            }
         }
     }
 
@@ -353,6 +389,7 @@ impl Val {
             Val::AnyRef(a) => Some(Ref::Any(a)),
             Val::ExnRef(e) => Some(Ref::Exn(e)),
             Val::I32(_) | Val::I64(_) | Val::F32(_) | Val::F64(_) | Val::V128(_) => None,
+            Val::ContRef(_) => None, // TODO(#10248): Return proper Ref::Cont when available
         }
     }
 
@@ -499,6 +536,9 @@ impl Val {
             // particular store, so they're always considered as "yes I came
             // from that store",
             Val::I32(_) | Val::I64(_) | Val::F32(_) | Val::F64(_) | Val::V128(_) => true,
+
+            // Continuation references are not yet associated with stores
+            Val::ContRef(_) => true, // TODO(#10248): Proper store association when implemented
         }
     }
 }
@@ -827,6 +867,7 @@ impl Ref {
             HeapType::Any => Ref::Any(None),
             HeapType::Extern => Ref::Extern(None),
             HeapType::Func => Ref::Func(None),
+            HeapType::Exn => Ref::Exn(None),
             ty => unreachable!("not a heap type: {ty:?}"),
         }
     }
@@ -1104,65 +1145,6 @@ impl Ref {
             Ref::Any(None) => true,
             Ref::Exn(Some(e)) => e.comes_from_same_store(store),
             Ref::Exn(None) => true,
-        }
-    }
-
-    pub(crate) fn into_table_element(
-        self,
-        store: &mut StoreOpaque,
-        ty: &RefType,
-    ) -> Result<TableElement> {
-        let mut store = AutoAssertNoGc::new(store);
-        self.ensure_matches_ty(&store, &ty)
-            .context("type mismatch: value does not match table element type")?;
-
-        match (self, ty.heap_type().top()) {
-            (Ref::Func(None), HeapType::Func) => {
-                assert!(ty.is_nullable());
-                Ok(TableElement::FuncRef(None))
-            }
-            (Ref::Func(Some(f)), HeapType::Func) => {
-                debug_assert!(
-                    f.comes_from_same_store(&store),
-                    "checked in `ensure_matches_ty`"
-                );
-                Ok(TableElement::FuncRef(Some(f.vm_func_ref(&store))))
-            }
-
-            (Ref::Extern(e), HeapType::Extern) => match e {
-                None => {
-                    assert!(ty.is_nullable());
-                    Ok(TableElement::GcRef(None))
-                }
-                Some(e) => {
-                    let gc_ref = e.try_clone_gc_ref(&mut store)?;
-                    Ok(TableElement::GcRef(Some(gc_ref)))
-                }
-            },
-
-            (Ref::Any(a), HeapType::Any) => match a {
-                None => {
-                    assert!(ty.is_nullable());
-                    Ok(TableElement::GcRef(None))
-                }
-                Some(a) => {
-                    let gc_ref = a.try_clone_gc_ref(&mut store)?;
-                    Ok(TableElement::GcRef(Some(gc_ref)))
-                }
-            },
-
-            (Ref::Exn(e), HeapType::Exn) => match e {
-                None => {
-                    assert!(ty.is_nullable());
-                    Ok(TableElement::GcRef(None))
-                }
-                Some(e) => {
-                    let gc_ref = e.try_clone_gc_ref(&mut store)?;
-                    Ok(TableElement::GcRef(Some(gc_ref)))
-                }
-            },
-
-            _ => unreachable!("checked that the value matches the type above"),
         }
     }
 }

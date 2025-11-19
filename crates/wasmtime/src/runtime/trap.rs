@@ -1,5 +1,7 @@
 #[cfg(feature = "coredump")]
 use super::coredump::WasmCoreDump;
+#[cfg(feature = "gc")]
+use crate::ThrownException;
 use crate::prelude::*;
 use crate::store::StoreOpaque;
 use crate::{AsContext, Module};
@@ -79,6 +81,8 @@ pub(crate) fn from_runtime_box(
         coredumpstack,
     } = *runtime_trap;
     let (mut error, pc) = match reason {
+        #[cfg(feature = "gc")]
+        crate::runtime::vm::TrapReason::Exception => (ThrownException.into(), None),
         // For user-defined errors they're already an `anyhow::Error` so no
         // conversion is really necessary here, but a `backtrace` may have
         // been captured so it's attempted to get inserted here.
@@ -433,7 +437,7 @@ impl FrameInfo {
     /// if no information can be found.
     pub(crate) fn new(module: Module, text_offset: usize) -> Option<FrameInfo> {
         let compiled_module = module.compiled_module();
-        let (index, _func_offset) = compiled_module.func_by_text_offset(text_offset)?;
+        let index = compiled_module.func_by_text_offset(text_offset)?;
         let func_start = compiled_module.func_start_srcloc(index);
         let instr = wasmtime_environ::lookup_file_pos(
             compiled_module.code_memory().address_map_data(),

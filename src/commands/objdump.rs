@@ -14,7 +14,11 @@ use std::iter::{self, Peekable};
 use std::path::{Path, PathBuf};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use wasmtime::Engine;
-use wasmtime_environ::{FilePos, StackMap, Trap, obj};
+use wasmtime_environ::{
+    FilePos, FrameInstPos, FrameStackShape, FrameStateSlot, FrameTable, FrameTableDescriptorIndex,
+    StackMap, Trap, obj,
+};
+use wasmtime_unwinder::{ExceptionHandler, ExceptionTable};
 
 /// A helper utility in wasmtime to explore the compiled object file format of
 /// a `*.cwasm` file.
@@ -65,6 +69,14 @@ pub struct ObjdumpCommand {
     /// Whether or not to show information about stack maps.
     #[arg(long, require_equals = true, value_name = "true|false")]
     stack_maps: Option<Option<bool>>,
+
+    /// Whether or not to show information about exception tables.
+    #[arg(long, require_equals = true, value_name = "true|false")]
+    exception_tables: Option<Option<bool>>,
+
+    /// Whether or not to show information about frame tables.
+    #[arg(long, require_equals = true, value_name = "true|false")]
+    frame_tables: Option<Option<bool>>,
 }
 
 fn optional_flag_with_default(flag: Option<Option<bool>>, default: bool) -> bool {
@@ -86,6 +98,14 @@ impl ObjdumpCommand {
 
     fn stack_maps(&self) -> bool {
         optional_flag_with_default(self.stack_maps, true)
+    }
+
+    fn exception_tables(&self) -> bool {
+        optional_flag_with_default(self.exception_tables, true)
+    }
+
+    fn frame_tables(&self) -> bool {
+        optional_flag_with_default(self.frame_tables, true)
     }
 
     /// Executes the command.
@@ -135,6 +155,24 @@ impl ObjdumpCommand {
                 .and_then(|section| section.data().ok())
                 .and_then(|bytes| StackMap::iter(bytes))
                 .map(|i| (Box::new(i) as Box<dyn Iterator<Item = _>>).peekable()),
+            exception_tables: elf
+                .section_by_name(obj::ELF_WASMTIME_EXCEPTIONS)
+                .and_then(|section| section.data().ok())
+                .and_then(|bytes| ExceptionTable::parse(bytes).ok())
+                .map(|table| table.into_iter())
+                .map(|i| (Box::new(i) as Box<dyn Iterator<Item = _>>).peekable()),
+            frame_tables: elf
+                .section_by_name(obj::ELF_WASMTIME_FRAMES)
+                .and_then(|section| section.data().ok())
+                .and_then(|bytes| FrameTable::parse(bytes).ok())
+                .map(|table| table.into_program_points())
+                .map(|i| (Box::new(i) as Box<dyn Iterator<Item = _>>).peekable()),
+
+            frame_table_descriptors: elf
+                .section_by_name(obj::ELF_WASMTIME_FRAMES)
+                .and_then(|section| section.data().ok())
+                .and_then(|bytes| FrameTable::parse(bytes).ok()),
+
             objdump: &self,
         };
 
@@ -220,6 +258,65 @@ impl ObjdumpCommand {
                 let inline_bytes = 9;
                 let width = self.address_width;
 
+                // Collect any "decorations" or annotations for this
+                // instruction. This includes the address map, stack
+                // maps, exception handlers, etc.
+                //
+                // Once they're collected then we print them before or
+                // after the instruction attempting to use some
+                // unicode characters to make it easier to read/scan.
+                //
+                // Note that some decorations occur "before" an
+                // instruction: for example, exception handler entries
+                // logically occur at the return point after a call,
+                // so "before" the instruction following the call.
+                let mut pre_decorations = Vec::new();
+                let mut post_decorations = Vec::new();
+                decorator.decorate(address, &mut pre_decorations, &mut post_decorations);
+
+                let print_whitespace_to_decoration = |stdout: &mut StandardStream| -> Result<()> {
+                    write!(stdout, "{:width$}  ", "")?;
+                    if self.bytes {
+                        for _ in 0..inline_bytes + 1 {
+                            write!(stdout, "   ")?;
+                        }
+                    }
+                    Ok(())
+                };
+
+                let print_decorations =
+                    |stdout: &mut StandardStream, decorations: Vec<String>| -> Result<()> {
+                        for (i, decoration) in decorations.iter().enumerate() {
+                            print_whitespace_to_decoration(stdout)?;
+                            let mut color = ColorSpec::new();
+                            color.set_fg(Some(Color::Cyan));
+                            stdout.set_color(&color)?;
+                            let final_decoration = i == decorations.len() - 1;
+                            if !final_decoration {
+                                write!(stdout, "├")?;
+                            } else {
+                                write!(stdout, "╰")?;
+                            }
+                            for (i, line) in decoration.lines().enumerate() {
+                                if i == 0 {
+                                    write!(stdout, "─╼ ")?;
+                                } else {
+                                    print_whitespace_to_decoration(stdout)?;
+                                    if final_decoration {
+                                        write!(stdout, "    ")?;
+                                    } else {
+                                        write!(stdout, "│   ")?;
+                                    }
+                                }
+                                writeln!(stdout, "{line}")?;
+                            }
+                            stdout.reset()?;
+                        }
+                        Ok(())
+                    };
+
+                print_decorations(&mut stdout, pre_decorations)?;
+
                 // Some instructions may disassemble to multiple lines, such as
                 // `br_table` with Pulley. Handle separate lines per-instruction
                 // here.
@@ -285,52 +382,7 @@ impl ObjdumpCommand {
                     }
                 }
 
-                // And now finally after an instruction is printed try to
-                // collect any "decorations" or annotations for this
-                // instruction. This is for example the address map, stack maps,
-                // etc.
-                //
-                // Once they're collected then print them after the instruction
-                // attempting to use some unicode characters to make it easier
-                // to read/scan.
-                let mut decorations = Vec::new();
-                decorator.decorate(address, &mut decorations);
-
-                let print_whitespace_to_decoration = |stdout: &mut StandardStream| -> Result<()> {
-                    write!(stdout, "{:width$}  ", "")?;
-                    if self.bytes {
-                        for _ in 0..inline_bytes + 1 {
-                            write!(stdout, "   ")?;
-                        }
-                    }
-                    Ok(())
-                };
-                for (i, decoration) in decorations.iter().enumerate() {
-                    print_whitespace_to_decoration(&mut stdout)?;
-                    let mut color = ColorSpec::new();
-                    color.set_fg(Some(Color::Cyan));
-                    stdout.set_color(&color)?;
-                    let final_decoration = i == decorations.len() - 1;
-                    if !final_decoration {
-                        write!(stdout, "├")?;
-                    } else {
-                        write!(stdout, "╰")?;
-                    }
-                    for (i, line) in decoration.lines().enumerate() {
-                        if i == 0 {
-                            write!(stdout, "─╼ ")?;
-                        } else {
-                            print_whitespace_to_decoration(&mut stdout)?;
-                            if final_decoration {
-                                write!(stdout, "    ")?;
-                            } else {
-                                write!(stdout, "│   ")?;
-                            }
-                        }
-                        writeln!(stdout, "{line}")?;
-                    }
-                    stdout.reset()?;
-                }
+                print_decorations(&mut stdout, post_decorations)?;
             }
         }
         Ok(())
@@ -497,13 +549,32 @@ struct Decorator<'a> {
     addrmap: Option<Peekable<Box<dyn Iterator<Item = (u32, FilePos)> + 'a>>>,
     traps: Option<Peekable<Box<dyn Iterator<Item = (u32, Trap)> + 'a>>>,
     stack_maps: Option<Peekable<Box<dyn Iterator<Item = (u32, StackMap<'a>)> + 'a>>>,
+    exception_tables:
+        Option<Peekable<Box<dyn Iterator<Item = (u32, Option<u32>, Vec<ExceptionHandler>)> + 'a>>>,
+    frame_tables: Option<
+        Peekable<
+            Box<
+                dyn Iterator<
+                        Item = (
+                            u32,
+                            FrameInstPos,
+                            Vec<(u32, FrameTableDescriptorIndex, FrameStackShape)>,
+                        ),
+                    > + 'a,
+            >,
+        >,
+    >,
+
+    frame_table_descriptors: Option<FrameTable<'a>>,
 }
 
 impl Decorator<'_> {
-    fn decorate(&mut self, address: u64, list: &mut Vec<String>) {
-        self.addrmap(address, list);
-        self.traps(address, list);
-        self.stack_maps(address, list);
+    fn decorate(&mut self, address: u64, pre_list: &mut Vec<String>, post_list: &mut Vec<String>) {
+        self.addrmap(address, post_list);
+        self.traps(address, post_list);
+        self.stack_maps(address, post_list);
+        self.exception_table(address, pre_list);
+        self.frame_table(address, pre_list, post_list);
     }
 
     fn addrmap(&mut self, address: u64, list: &mut Vec<String>) {
@@ -557,5 +628,105 @@ impl Decorator<'_> {
                 stack_map.offsets().collect::<Vec<_>>()
             ));
         }
+    }
+
+    fn exception_table(&mut self, address: u64, list: &mut Vec<String>) {
+        if !self.objdump.exception_tables() {
+            return;
+        }
+        let Some(exception_tables) = &mut self.exception_tables else {
+            return;
+        };
+        while let Some((addr, frame_offset, handlers)) =
+            exception_tables.next_if(|(addr, _, _)| u64::from(*addr) <= address)
+        {
+            if u64::from(addr) != address {
+                continue;
+            }
+            if let Some(frame_offset) = frame_offset {
+                list.push(format!(
+                    "exception frame offset: SP = FP - 0x{frame_offset:x}",
+                ));
+            }
+            for handler in &handlers {
+                let tag = match handler.tag {
+                    Some(tag) => format!("tag={tag}"),
+                    None => "default handler".to_string(),
+                };
+                let context = match handler.context_sp_offset {
+                    Some(offset) => format!("context at [SP+0x{offset:x}]"),
+                    None => "no dynamic context".to_string(),
+                };
+                list.push(format!(
+                    "exception handler: {tag}, {context}, handler=0x{:x}",
+                    handler.handler_offset
+                ));
+            }
+        }
+    }
+
+    fn frame_table(
+        &mut self,
+        address: u64,
+        pre_list: &mut Vec<String>,
+        post_list: &mut Vec<String>,
+    ) {
+        if !self.objdump.frame_tables() {
+            return;
+        }
+        let (Some(frame_table_iter), Some(frame_tables)) =
+            (&mut self.frame_tables, &self.frame_table_descriptors)
+        else {
+            return;
+        };
+
+        while let Some((addr, pos, frames)) =
+            frame_table_iter.next_if(|(addr, _, _)| u64::from(*addr) <= address)
+        {
+            if u64::from(addr) != address {
+                continue;
+            }
+            let list = match pos {
+                // N.B.: the "post" position means that we are
+                // attached to the end of the previous instruction
+                // (its "post"); which means that from this
+                // instruction's PoV, we print before the instruction
+                // (the "pre list"). And vice versa for the "pre"
+                // position. Hence the reversal here.
+                FrameInstPos::Post => &mut *pre_list,
+                FrameInstPos::Pre => &mut *post_list,
+            };
+            let pos = match pos {
+                FrameInstPos::Post => "after previous inst",
+                FrameInstPos::Pre => "before next inst",
+            };
+            for (wasm_pc, frame_descriptor, stack_shape) in frames {
+                let (frame_descriptor_data, offset) =
+                    frame_tables.frame_descriptor(frame_descriptor).unwrap();
+                let frame_descriptor = FrameStateSlot::parse(frame_descriptor_data).unwrap();
+
+                let local_shape = Self::describe_local_shape(&frame_descriptor);
+                let stack_shape = Self::describe_stack_shape(&frame_descriptor, stack_shape);
+                let func_key = frame_descriptor.func_key();
+                list.push(format!("debug frame state ({pos}): func key {func_key:?}, wasm PC {wasm_pc}, slot at FP-0x{offset:x}, locals {local_shape}, stack {stack_shape}"));
+            }
+        }
+    }
+
+    fn describe_local_shape(desc: &FrameStateSlot<'_>) -> String {
+        let mut parts = vec![];
+        for (offset, ty) in desc.locals() {
+            parts.push(format!("{ty:?} @ slot+0x{:x}", offset.offset()));
+        }
+        parts.join(", ")
+    }
+
+    fn describe_stack_shape(desc: &FrameStateSlot<'_>, shape: FrameStackShape) -> String {
+        let mut parts = vec![];
+        for (offset, ty) in desc.stack(shape) {
+            parts.push(format!("{ty:?} @ slot+0x{:x}", offset.offset()));
+        }
+        parts.reverse();
+        parts.join(", ")
     }
 }

@@ -2,14 +2,15 @@ use crate::module::{
     FuncRefIndex, Initializer, MemoryInitialization, MemoryInitializer, Module, TableSegment,
     TableSegmentElements,
 };
+use crate::prelude::*;
 use crate::{
     ConstExpr, ConstOp, DataIndex, DefinedFuncIndex, ElemIndex, EngineOrModuleTypeIndex,
-    EntityIndex, EntityType, FuncIndex, GlobalIndex, IndexType, InitMemory, MemoryIndex,
+    EntityIndex, EntityType, FuncIndex, FuncKey, GlobalIndex, IndexType, InitMemory, MemoryIndex,
     ModuleInternedTypeIndex, ModuleTypesBuilder, PrimaryMap, SizeOverflow, StaticMemoryInitializer,
-    TableIndex, TableInitialValue, Tag, TagIndex, Tunables, TypeConvert, TypeIndex, Unsigned,
-    WasmError, WasmHeapTopType, WasmHeapType, WasmResult, WasmValType, WasmparserTypeConverter,
+    StaticModuleIndex, TableIndex, TableInitialValue, Tag, TagIndex, Tunables, TypeConvert,
+    TypeIndex, WasmError, WasmHeapTopType, WasmHeapType, WasmResult, WasmValType,
+    WasmparserTypeConverter,
 };
-use crate::{StaticModuleIndex, prelude::*};
 use anyhow::{Result, bail};
 use cranelift_entity::SecondaryMap;
 use cranelift_entity::packed_option::ReservedValue;
@@ -37,10 +38,10 @@ pub struct ModuleEnvironment<'a, 'data> {
     tunables: &'a Tunables,
 }
 
-/// The result of translating via `ModuleEnvironment`. Function bodies are not
-/// yet translated, and data initializers have not yet been copied out of the
-/// original buffer.
-#[derive(Default)]
+/// The result of translating via `ModuleEnvironment`.
+///
+/// Function bodies are not yet translated, and data initializers have not yet
+/// been copied out of the original buffer.
 pub struct ModuleTranslation<'data> {
     /// Module information.
     pub module: Module,
@@ -55,12 +56,15 @@ pub struct ModuleTranslation<'data> {
     /// References to the function bodies.
     pub function_body_inputs: PrimaryMap<DefinedFuncIndex, FunctionBodyData<'data>>,
 
-    /// For each imported function, the single statically-known defined function
-    /// that satisfies that import, if any. This is used to turn what would
-    /// otherwise be indirect calls through the imports table into direct calls,
-    /// when possible.
-    pub known_imported_functions:
-        SecondaryMap<FuncIndex, Option<(StaticModuleIndex, DefinedFuncIndex)>>,
+    /// For each imported function, the single statically-known function that
+    /// always satisfies that import, if any.
+    ///
+    /// This is used to turn what would otherwise be indirect calls through the
+    /// imports table into direct calls, when possible.
+    ///
+    /// When filled in, this only ever contains
+    /// `FuncKey::DefinedWasmFunction(..)`s and `FuncKey::Intrinsic(..)`s.
+    pub known_imported_functions: SecondaryMap<FuncIndex, Option<FuncKey>>,
 
     /// A list of type signatures which are considered exported from this
     /// module, or those that can possibly be called. This list is sorted, and
@@ -109,11 +113,36 @@ pub struct ModuleTranslation<'data> {
 }
 
 impl<'data> ModuleTranslation<'data> {
+    /// Create a new translation for the module with the given index.
+    pub fn new(module_index: StaticModuleIndex) -> Self {
+        Self {
+            module: Module::new(module_index),
+            wasm: &[],
+            function_body_inputs: PrimaryMap::default(),
+            known_imported_functions: SecondaryMap::default(),
+            exported_signatures: Vec::default(),
+            debuginfo: DebugInfoData::default(),
+            has_unparsed_debuginfo: false,
+            data: Vec::default(),
+            data_align: None,
+            total_data: 0,
+            passive_data: Vec::default(),
+            total_passive_data: 0,
+            code_index: 0,
+            types: None,
+        }
+    }
+
     /// Returns a reference to the type information of the current module.
     pub fn get_types(&self) -> &Types {
         self.types
             .as_ref()
             .expect("module type information to be available")
+    }
+
+    /// Get this translation's module's index.
+    pub fn module_index(&self) -> StaticModuleIndex {
+        self.module.module_index
     }
 }
 
@@ -174,9 +203,10 @@ impl<'a, 'data> ModuleEnvironment<'a, 'data> {
         tunables: &'a Tunables,
         validator: &'a mut Validator,
         types: &'a mut ModuleTypesBuilder,
+        module_index: StaticModuleIndex,
     ) -> Self {
         Self {
-            result: ModuleTranslation::default(),
+            result: ModuleTranslation::new(module_index),
             types,
             tunables,
             validator,
@@ -329,7 +359,13 @@ impl<'a, 'data> ModuleEnvironment<'a, 'data> {
                         TypeRef::Tag(ty) => {
                             let index = TypeIndex::from_u32(ty.func_type_idx);
                             let signature = self.result.module.types[index];
-                            let tag = Tag { signature };
+                            let exception = self.types.define_exception_type_for_tag(
+                                signature.unwrap_module_type_index(),
+                            );
+                            let tag = Tag {
+                                signature,
+                                exception: EngineOrModuleTypeIndex::Module(exception),
+                            };
                             self.result.module.num_imported_tags += 1;
                             EntityType::Tag(tag)
                         }
@@ -360,13 +396,14 @@ impl<'a, 'data> ModuleEnvironment<'a, 'data> {
                 for entry in tables {
                     let wasmparser::Table { ty, init } = entry?;
                     let table = self.convert_table_type(&ty)?;
+                    self.result.module.needs_gc_heap |= table.ref_type.is_vmgcref_type();
                     self.result.module.tables.push(table);
                     let init = match init {
                         wasmparser::TableInit::RefNull => TableInitialValue::Null {
                             precomputed: Vec::new(),
                         },
                         wasmparser::TableInit::Expr(expr) => {
-                            let (init, escaped) = ConstExpr::from_wasmparser(expr)?;
+                            let (init, escaped) = ConstExpr::from_wasmparser(self, expr)?;
                             for f in escaped {
                                 self.flag_func_escaped(f);
                             }
@@ -400,7 +437,10 @@ impl<'a, 'data> ModuleEnvironment<'a, 'data> {
                     let sigindex = entry?.func_type_idx;
                     let ty = TypeIndex::from_u32(sigindex);
                     let interned_index = self.result.module.types[ty];
-                    self.result.module.push_tag(interned_index);
+                    let exception = self
+                        .types
+                        .define_exception_type_for_tag(interned_index.unwrap_module_type_index());
+                    self.result.module.push_tag(interned_index, exception);
                 }
             }
 
@@ -412,7 +452,7 @@ impl<'a, 'data> ModuleEnvironment<'a, 'data> {
 
                 for entry in globals {
                     let wasmparser::Global { ty, init_expr } = entry?;
-                    let (initializer, escaped) = ConstExpr::from_wasmparser(init_expr)?;
+                    let (initializer, escaped) = ConstExpr::from_wasmparser(self, init_expr)?;
                     for f in escaped {
                         self.flag_func_escaped(f);
                     }
@@ -487,7 +527,7 @@ impl<'a, 'data> ModuleEnvironment<'a, 'data> {
                             let mut exprs =
                                 Vec::with_capacity(usize::try_from(items.count()).unwrap());
                             for expr in items {
-                                let (expr, escaped) = ConstExpr::from_wasmparser(expr?)?;
+                                let (expr, escaped) = ConstExpr::from_wasmparser(self, expr?)?;
                                 exprs.push(expr);
                                 for func in escaped {
                                     self.flag_func_escaped(func);
@@ -503,7 +543,7 @@ impl<'a, 'data> ModuleEnvironment<'a, 'data> {
                             offset_expr,
                         } => {
                             let table_index = TableIndex::from_u32(table_index.unwrap_or(0));
-                            let (offset, escaped) = ConstExpr::from_wasmparser(offset_expr)?;
+                            let (offset, escaped) = ConstExpr::from_wasmparser(self, offset_expr)?;
                             debug_assert!(escaped.is_empty());
 
                             self.result
@@ -545,7 +585,7 @@ impl<'a, 'data> ModuleEnvironment<'a, 'data> {
                     self.result.code_index + self.result.module.num_imported_funcs as u32;
                 let func_index = FuncIndex::from_u32(func_index);
 
-                if self.tunables.generate_native_debuginfo {
+                if self.tunables.debug_native {
                     let sig_index = self.result.module.functions[func_index]
                         .signature
                         .unwrap_module_type_index();
@@ -612,9 +652,13 @@ impl<'a, 'data> ModuleEnvironment<'a, 'data> {
                         } => {
                             let range = mk_range(&mut self.result.total_data)?;
                             let memory_index = MemoryIndex::from_u32(memory_index);
-                            let (offset, escaped) = ConstExpr::from_wasmparser(offset_expr)?;
+                            let (offset, escaped) = ConstExpr::from_wasmparser(self, offset_expr)?;
                             debug_assert!(escaped.is_empty());
 
+                            let initializers = match &mut self.result.module.memory_initialization {
+                                MemoryInitialization::Segmented(i) => i,
+                                _ => unreachable!(),
+                            };
                             initializers.push(MemoryInitializer {
                                 memory_index,
                                 offset,
@@ -697,7 +741,7 @@ and for re-adding support for interface types you can see this issue:
     }
 
     fn dwarf_section(&mut self, name: &str, section: &CustomSectionReader<'data>) {
-        if !self.tunables.generate_native_debuginfo && !self.tunables.parse_wasm_debuginfo {
+        if !self.tunables.debug_native && !self.tunables.parse_wasm_debuginfo {
             self.result.has_unparsed_debuginfo = true;
             return;
         }
@@ -825,12 +869,12 @@ and for re-adding support for interface types you can see this issue:
                 }
                 wasmparser::Name::Module { name, .. } => {
                     self.result.module.name = Some(name.to_string());
-                    if self.tunables.generate_native_debuginfo {
+                    if self.tunables.debug_native {
                         self.result.debuginfo.name_section.module_name = Some(name);
                     }
                 }
                 wasmparser::Name::Local(reader) => {
-                    if !self.tunables.generate_native_debuginfo {
+                    if !self.tunables.debug_native {
                         continue;
                     }
                     for f in reader {
@@ -961,9 +1005,9 @@ impl ModuleTranslation<'_> {
             fn eval_offset(&mut self, memory_index: MemoryIndex, expr: &ConstExpr) -> Option<u64> {
                 match (expr.ops(), self.module.memories[memory_index].idx_type) {
                     (&[ConstOp::I32Const(offset)], IndexType::I32) => {
-                        Some(offset.unsigned().into())
+                        Some(offset.cast_unsigned().into())
                     }
-                    (&[ConstOp::I64Const(offset)], IndexType::I64) => Some(offset.unsigned()),
+                    (&[ConstOp::I64Const(offset)], IndexType::I64) => Some(offset.cast_unsigned()),
                     _ => None,
                 }
             }
@@ -1200,8 +1244,8 @@ impl ModuleTranslation<'_> {
             // include it in the statically-built array of initial
             // contents.
             let offset = match segment.offset.ops() {
-                &[ConstOp::I32Const(offset)] => u64::from(offset.unsigned()),
-                &[ConstOp::I64Const(offset)] => offset.unsigned(),
+                &[ConstOp::I32Const(offset)] => u64::from(offset.cast_unsigned()),
+                &[ConstOp::I64Const(offset)] => offset.cast_unsigned(),
                 _ => break,
             };
 

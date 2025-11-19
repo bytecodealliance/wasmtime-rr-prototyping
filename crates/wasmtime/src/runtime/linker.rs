@@ -279,26 +279,24 @@ impl<T> Linker<T> {
     /// ```
     pub fn define_unknown_imports_as_default_values(
         &mut self,
-        store: &mut impl AsContextMut<Data = T>,
+        mut store: impl AsContextMut<Data = T>,
         module: &Module,
     ) -> anyhow::Result<()>
     where
         T: 'static,
     {
+        let mut store = store.as_context_mut();
         for import in module.imports() {
             if let Err(import_err) = self._get_by_import(&import) {
                 let default_extern =
-                    import_err
-                        .ty()
-                        .default_value(&mut *store)
-                        .with_context(|| {
-                            anyhow!(
-                                "no default value exists for `{}::{}` with type `{:?}`",
-                                import.module(),
-                                import.name(),
-                                import_err.ty(),
-                            )
-                        })?;
+                    import_err.ty().default_value(&mut store).with_context(|| {
+                        anyhow!(
+                            "no default value exists for `{}::{}` with type `{:?}`",
+                            import.module(),
+                            import.name(),
+                            import_err.ty(),
+                        )
+                    })?;
                 self.define(
                     store.as_context(),
                     import.module(),
@@ -995,7 +993,7 @@ impl<T> Linker<T> {
         let dst = self.import_key(as_module, Some(as_name));
         match self.map.get(&src).cloned() {
             Some(item) => self.insert(dst, item)?,
-            None => bail!("no item named `{}::{}` defined", module, name),
+            None => bail!("no item named `{module}::{name}` defined"),
         }
         Ok(self)
     }
@@ -1038,7 +1036,7 @@ impl<T> Linker<T> {
                     Some(name) => format!("{module}::{name}"),
                     None => module.to_string(),
                 };
-                bail!("import of `{}` defined twice", desc)
+                bail!("import of `{desc}` defined twice")
             }
             Entry::Occupied(mut o) => {
                 o.insert(item);
@@ -1344,7 +1342,7 @@ impl<T> Linker<T> {
             if let Extern::Func(func) = external {
                 return Ok(func);
             }
-            bail!("default export in '{}' is not a function", module);
+            bail!("default export in '{module}' is not a function");
         }
 
         // For compatibility, also recognize "_start".
@@ -1352,7 +1350,7 @@ impl<T> Linker<T> {
             if let Extern::Func(func) = external {
                 return Ok(func);
             }
-            bail!("`_start` in '{}' is not a function", module);
+            bail!("`_start` in '{module}' is not a function");
         }
 
         // Otherwise return a no-op function.
@@ -1412,7 +1410,7 @@ impl Definition {
                 *size = m.size();
             }
             Definition::Extern(Extern::Table(m), DefinitionType::Table(_, size)) => {
-                *size = m.internal_size(store);
+                *size = m._size(store);
             }
             _ => {}
         }
@@ -1423,9 +1421,7 @@ impl DefinitionType {
     pub(crate) fn from(store: &StoreOpaque, item: &Extern) -> DefinitionType {
         match item {
             Extern::Func(f) => DefinitionType::Func(f.type_index(store)),
-            Extern::Table(t) => {
-                DefinitionType::Table(*t.wasmtime_ty(store), t.internal_size(store))
-            }
+            Extern::Table(t) => DefinitionType::Table(*t.wasmtime_ty(store), t._size(store)),
             Extern::Global(t) => DefinitionType::Global(*t.wasmtime_ty(store)),
             Extern::Memory(t) => {
                 DefinitionType::Memory(*t.wasmtime_ty(store), t.internal_size(store))

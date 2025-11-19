@@ -282,6 +282,10 @@ impl Inst {
             | Inst::VecStoreLaneRev { .. } => InstructionSet::VXRS_EXT2,
 
             Inst::DummyUse { .. } => InstructionSet::Base,
+
+            Inst::LabelAddress { .. } => InstructionSet::Base,
+
+            Inst::SequencePoint { .. } => InstructionSet::Base,
         }
     }
 
@@ -1006,6 +1010,10 @@ fn s390x_get_operands(inst: &mut Inst, collector: &mut DenyReuseVisitor<impl Ope
         Inst::DummyUse { reg } => {
             collector.reg_use(reg);
         }
+        Inst::LabelAddress { dst, .. } => {
+            collector.reg_def(dst);
+        }
+        Inst::SequencePoint { .. } => {}
     }
 }
 
@@ -1119,6 +1127,16 @@ impl MachInst for Inst {
         match self {
             Inst::Call { .. } => true,
             _ => false,
+        }
+    }
+
+    fn call_type(&self) -> CallType {
+        match self {
+            Inst::Call { .. } | Inst::ElfTlsGetOffset { .. } => CallType::Regular,
+
+            Inst::ReturnCall { .. } => CallType::TailCall,
+
+            _ => CallType::None,
         }
     }
 
@@ -3394,6 +3412,13 @@ impl Inst {
             &Inst::DummyUse { reg } => {
                 let reg = pretty_print_reg(reg);
                 format!("dummy_use {reg}")
+            }
+            &Inst::LabelAddress { dst, label } => {
+                let dst = pretty_print_reg(dst.to_reg());
+                format!("label_address {dst}, {label:?}")
+            }
+            &Inst::SequencePoint {} => {
+                format!("sequence_point")
             }
         }
     }

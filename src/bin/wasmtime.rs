@@ -90,6 +90,9 @@ enum Subcommand {
     #[cfg(feature = "objdump")]
     Objdump(wasmtime_cli::commands::ObjdumpCommand),
 
+    #[cfg(feature = "wizer")]
+    Wizer(wasmtime_cli::commands::WizerCommand),
+
     /// Run a determinstic, embedding-agnostic replay execution of the Wasm module
     /// according to a prior recorded execution trace (e.g. generated with the
     /// `--record` option under `wasmtime run`).
@@ -100,7 +103,7 @@ enum Subcommand {
     ///
     /// Note: Minimal configs for deterministic Wasm semantics will be
     /// enforced during replay by default (NaN canonicalization, deterministic relaxed SIMD)
-    #[cfg(feature = "rr")]
+    #[cfg(all(feature = "run", feature = "rr"))]
     Replay(wasmtime_cli::commands::ReplayCommand),
 }
 
@@ -114,10 +117,7 @@ impl Wasmtime {
 
         match subcommand {
             #[cfg(feature = "run")]
-            Subcommand::Run(c) => c.execute(
-                #[cfg(feature = "rr")]
-                None,
-            ),
+            Subcommand::Run(c) => c.execute(),
 
             #[cfg(feature = "cache")]
             Subcommand::Config(c) => c.execute(),
@@ -142,6 +142,9 @@ impl Wasmtime {
 
             #[cfg(feature = "objdump")]
             Subcommand::Objdump(c) => c.execute(),
+
+            #[cfg(feature = "wizer")]
+            Subcommand::Wizer(c) => c.execute(),
 
             #[cfg(feature = "rr")]
             Subcommand::Replay(c) => c.execute(),
