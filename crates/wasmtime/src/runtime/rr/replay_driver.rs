@@ -287,7 +287,10 @@ impl<T: 'static> ReplayInstance<T> {
                 }
             }
 
-            _ => Err(ReplayError::IncorrectEventVariant)?,
+            _ => {
+                log::error!("Unexpected non-top-level RR event: {:?}", rr_event);
+                Err(ReplayError::IncorrectEventVariant)?
+            }
         }
         Ok(())
     }
@@ -445,7 +448,10 @@ impl<T: 'static> ReplayInstance<T> {
                 }
             }
 
-            _ => Err(ReplayError::IncorrectEventVariant)?,
+            _ => {
+                log::error!("Unexpected non-top-level RR event: {:?}", rr_event);
+                Err(ReplayError::IncorrectEventVariant)?
+            }
         }
         Ok(())
     }

@@ -603,7 +603,7 @@ mod tests {
             RecordBuffer::new_recorder(Box::new(File::create(tmppath)?), record_settings)?;
 
         record_fn(&mut recorder)?;
-        recorder.flush()?;
+        drop(recorder);
 
         let tmp = tmp.into_temp_path();
         let tmppath = <TempPath as AsRef<Path>>::as_ref(&tmp)

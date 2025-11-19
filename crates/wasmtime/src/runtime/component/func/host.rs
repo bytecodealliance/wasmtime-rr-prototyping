@@ -371,6 +371,7 @@ where
         unsafe {
             flags.set_may_leave(true);
         }
+        lower.exit_call()?;
     }
 
     return Ok(());
