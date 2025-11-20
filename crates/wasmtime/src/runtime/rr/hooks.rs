@@ -12,8 +12,6 @@ use wasmtime_environ::component::{ComponentTypes, TypeFuncIndex};
 
 /// Wasm function type information for RR hooks
 pub enum RRWasmFuncType<'a> {
-    /// No RR hooks to be performed
-    None,
     /// Core RR hooks to be performed
     Core {
         ty: &'a FuncType,
@@ -25,4 +23,7 @@ pub enum RRWasmFuncType<'a> {
         type_idx: TypeFuncIndex,
         types: Arc<ComponentTypes>,
     },
+    /// No RR hooks to be performed
+    #[cfg(feature = "component-model")]
+    None,
 }

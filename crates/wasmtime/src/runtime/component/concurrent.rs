@@ -1803,7 +1803,7 @@ impl Instance {
                     } else {
                         RRWasmFuncType::None
                     };
-                    crate::Func::call_unchecked_raw_with_rr(
+                    crate::Func::call_unchecked_raw(
                         &mut store,
                         callee.as_non_null(),
                         NonNull::new(
@@ -1992,6 +1992,7 @@ impl Instance {
                                     &mut store,
                                     func.as_non_null(),
                                     slice::from_ref(&post_return_arg).into(),
+                                    RRWasmFuncType::None,
                                 )?;
                             }
                         }
@@ -2137,6 +2138,7 @@ impl Instance {
                 // for details) we know it takes count parameters and returns
                 // `dst.len()` results.
                 unsafe {
+                    // No RR on guest->guest calls
                     crate::Func::call_unchecked_raw(
                         &mut store,
                         start.as_non_null(),
@@ -2144,6 +2146,7 @@ impl Instance {
                             &mut src[..count.max(dst.len())] as *mut [MaybeUninit<ValRaw>] as _,
                         )
                         .unwrap(),
+                        RRWasmFuncType::None,
                     )?;
                 }
                 dst.copy_from_slice(&src[..dst.len()]);
@@ -2172,10 +2175,12 @@ impl Instance {
                     // for details) we know it takes `src.len()` parameters and
                     // returns up to 1 result.
                     unsafe {
+                        // No RR on guest->guest calls
                         crate::Func::call_unchecked_raw(
                             &mut store,
                             return_.as_non_null(),
                             my_src.as_mut_slice().into(),
+                            RRWasmFuncType::None,
                         )?;
                     }
                     let state = store.0.concurrent_state_mut();
@@ -2265,6 +2270,7 @@ impl Instance {
                 &mut store,
                 function.as_non_null(),
                 params.as_mut_slice().into(),
+                RRWasmFuncType::None,
             )?;
             flags.set_may_enter(may_enter_after_call);
         }

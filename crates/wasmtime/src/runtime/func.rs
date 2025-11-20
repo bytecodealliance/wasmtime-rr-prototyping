@@ -1046,7 +1046,7 @@ impl Func {
         unsafe {
             let ty = &self.ty(&store);
             let origin = self.origin.expand();
-            Self::call_unchecked_raw_with_rr(
+            Self::call_unchecked_raw(
                 &mut store,
                 func_ref,
                 params_and_returns,
@@ -1055,17 +1055,11 @@ impl Func {
         }
     }
 
-    /// Same as [`Func::call_unchecked_raw`] but enables recording and replaying
-    /// hooks for func entry/exit based on whether the intended call was from a component or
-    /// core wasm module.
+    /// Raw, unchecked call to the underlying func_ref.
     ///
-    /// This method is essentially a wrapper over [`Func::call_unchecked_raw`] and operates exactly like it
-    /// when recording/replay is not enabled, so use this for all calls that will potentially need
-    /// to be recorded/replayed.
-    ///
-    /// `RRWasmFuncType::None` can be used to disable recording/replaying and passthrough to `call_unchecked_raw`.
-    /// Eventually we can replace all occurences of `call_unchecked_raw` with this method with `RRWasmFuncType::None``
-    pub(crate) unsafe fn call_unchecked_raw_with_rr<T>(
+    /// This method contains record/replay hooks for either component or core wasm source that
+    /// invoked it based on `rr`. `RRWasmFuncType::None` can be used to disable record/replay for the call
+    pub(crate) unsafe fn call_unchecked_raw<T>(
         mut store: &mut StoreContextMut<'_, T>,
         func_ref: NonNull<VMFuncRef>,
         params_and_returns: NonNull<[ValRaw]>,
@@ -1080,7 +1074,7 @@ impl Func {
                         // SAFETY: the safety of this function call is the same as the contract
                         // of this function.
                         unsafe {
-                            Self::call_unchecked_raw(&mut store, func_ref, params_and_returns)
+                            Self::call_unchecked_raw_inner(&mut store, func_ref, params_and_returns)
                         }
                     },
                     unsafe { params_and_returns.as_ref() },
@@ -1093,7 +1087,7 @@ impl Func {
             RRWasmFuncType::Component { type_idx, types } => {
                 rr::component_hooks::record_and_replay_validate_wasm_func(
                     |mut store| unsafe {
-                        Self::call_unchecked_raw(&mut store, func_ref, params_and_returns)
+                        Self::call_unchecked_raw_inner(&mut store, func_ref, params_and_returns)
                     },
                     unsafe { params_and_returns.as_ref() },
                     type_idx,
@@ -1102,13 +1096,14 @@ impl Func {
                 )
             }
             // Passthrough
+            #[cfg(feature = "component-model")]
             RRWasmFuncType::None => unsafe {
-                Self::call_unchecked_raw(&mut store, func_ref, params_and_returns)
+                Self::call_unchecked_raw_inner(&mut store, func_ref, params_and_returns)
             },
         }
     }
 
-    pub(crate) unsafe fn call_unchecked_raw<T>(
+    unsafe fn call_unchecked_raw_inner<T>(
         store: &mut StoreContextMut<'_, T>,
         func_ref: NonNull<VMFuncRef>,
         params_and_returns: NonNull<[ValRaw]>,

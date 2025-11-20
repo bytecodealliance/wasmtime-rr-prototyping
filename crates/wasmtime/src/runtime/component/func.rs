@@ -633,7 +633,7 @@ impl Func {
 
             let type_idx = self.abi_info(store.0).2;
             let types = self.instance.id().get(store.0).component().types().clone();
-            crate::Func::call_unchecked_raw_with_rr(
+            crate::Func::call_unchecked_raw(
                 &mut store,
                 export,
                 params_and_returns,
@@ -791,6 +791,7 @@ impl Func {
                     func,
                     NonNull::new(core::ptr::slice_from_raw_parts(&post_return_arg, 1).cast_mut())
                         .unwrap(),
+                    RRWasmFuncType::None,
                 )?;
             }
 
