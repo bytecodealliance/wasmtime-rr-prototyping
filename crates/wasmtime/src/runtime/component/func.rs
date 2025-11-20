@@ -4,7 +4,7 @@ use crate::component::storage::storage_as_slice;
 use crate::component::types::ComponentFunc;
 use crate::component::values::Val;
 use crate::prelude::*;
-use crate::rr::component_hooks;
+use crate::rr::{RRWasmFuncType, component_hooks};
 use crate::runtime::vm::component::{ComponentInstance, InstanceFlags, ResourceTables};
 use crate::runtime::vm::{Export, VMFuncRef};
 use crate::store::StoreOpaque;
@@ -581,16 +581,12 @@ impl Func {
         LowerParams: Copy,
         LowerReturn: Copy,
     {
-        #[cfg(feature = "rr-component")]
-        {
-            use crate::rr::component_events::WasmFuncBeginEvent;
+        component_hooks::record_wasm_func_begin(
+            self.instance.id().instance(),
+            self.index,
+            store.0,
+        )?;
 
-            let instance = self.instance.id().instance();
-            let func_idx = self.index;
-            store
-                .0
-                .record_event(|| WasmFuncBeginEvent { instance, func_idx })?;
-        }
         let export = self.lifted_core_func(store.0);
 
         #[repr(C)]
@@ -635,12 +631,13 @@ impl Func {
             ))
             .unwrap();
 
-            component_hooks::record_and_replay_validate_wasm_func(
-                |store| crate::Func::call_unchecked_raw(store, export, params_and_returns),
-                params_and_returns.as_ref(),
-                self.abi_info(store.0).2,
-                self.instance.id().get(store.0).component().types().clone(),
+            let type_idx = self.abi_info(store.0).2;
+            let types = self.instance.id().get(store.0).component().types().clone();
+            crate::Func::call_unchecked_raw_with_rr(
                 &mut store,
+                export,
+                params_and_returns,
+                RRWasmFuncType::Component { type_idx, types },
             )?;
         }
 

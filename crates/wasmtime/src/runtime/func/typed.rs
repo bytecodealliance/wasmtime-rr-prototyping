@@ -211,6 +211,8 @@ where
         // For component mode, Realloc uses this method `TypedFunc::call_raw`, but Realloc is its
         // own separate event for record/replay purposes. For now, we use the should_record flag to
         // distinguish but this could be removed in the future by folding it into the main function call event.
+        //
+        // Note: This can't use [`crate::Func::call_unchecked_raw_with_rr`] directly because of the closure capture
         rr::core_hooks::record_and_replay_validate_wasm_func(
             |store| {
                 invoke_wasm_and_catch_traps(store, |caller, vm| {

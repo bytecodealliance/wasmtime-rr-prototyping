@@ -1,4 +1,5 @@
 use crate::ValRaw;
+use crate::component::ComponentInstanceId;
 #[cfg(feature = "rr-component")]
 use crate::rr::{RecordBuffer, Recorder, component_events::MemorySliceWriteEvent};
 
@@ -10,7 +11,7 @@ use crate::rr::common_events::{HostFuncEntryEvent, WasmFuncReturnEvent};
 #[cfg(feature = "rr-component")]
 use crate::rr::component_events::{
     LowerFlatEntryEvent, LowerFlatReturnEvent, LowerMemoryEntryEvent, LowerMemoryReturnEvent,
-    WasmFuncEntryEvent,
+    WasmFuncBeginEvent, WasmFuncEntryEvent,
 };
 #[cfg(feature = "rr-component")]
 use crate::rr::{RRFuncArgVals, ResultEvent, common_events::HostFuncReturnEvent};
@@ -18,7 +19,7 @@ use crate::store::StoreOpaque;
 use crate::{StoreContextMut, prelude::*};
 use alloc::sync::Arc;
 use core::mem::MaybeUninit;
-use wasmtime_environ::component::{ComponentTypes, InterfaceType, TypeFuncIndex};
+use wasmtime_environ::component::{ComponentTypes, ExportIndex, InterfaceType, TypeFuncIndex};
 #[cfg(all(feature = "rr-component"))]
 use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 
@@ -28,6 +29,22 @@ use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 pub enum ReplayLoweringPhase {
     WasmFuncEntry,
     HostFuncReturn,
+}
+
+/// Record hook for initiating wasm component function call
+///
+/// This differs from WasmFuncEntryEvent since this is pre-lowering, and
+/// WasmFuncEntryEvent is post-lowering
+#[inline]
+pub fn record_wasm_func_begin(
+    instance: ComponentInstanceId,
+    func_idx: ExportIndex,
+    store: &mut StoreOpaque,
+) -> Result<()> {
+    #[cfg(feature = "rr-component")]
+    store.record_event(|| WasmFuncBeginEvent { instance, func_idx })?;
+    let _ = (instance, func_idx, store);
+    Ok(())
 }
 
 /// Record hook wrapping a wasm component export function invocation and replay

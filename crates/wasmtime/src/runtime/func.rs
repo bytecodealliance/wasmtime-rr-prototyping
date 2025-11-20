@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use crate::rr;
+use crate::rr::{self, RRWasmFuncType};
 use crate::runtime::Uninhabited;
 use crate::runtime::vm::{
     self, InterpreterRef, SendSyncPtr, StoreBox, VMArrayCallHostFuncContext,
@@ -1043,17 +1043,69 @@ impl Func {
         let func_ref = self.vm_func_ref(store.0);
         let params_and_returns = NonNull::new(params_and_returns).unwrap_or(NonNull::from(&mut []));
 
-        rr::core_hooks::record_and_replay_validate_wasm_func(
-            |mut store| {
-                // SAFETY: the safety of this function call is the same as the contract
-                // of this function.
-                unsafe { Self::call_unchecked_raw(&mut store, func_ref, params_and_returns) }
+        unsafe {
+            let ty = &self.ty(&store);
+            let origin = self.origin.expand();
+            Self::call_unchecked_raw_with_rr(
+                &mut store,
+                func_ref,
+                params_and_returns,
+                RRWasmFuncType::Core { ty, origin },
+            )
+        }
+    }
+
+    /// Same as [`Func::call_unchecked_raw`] but enables recording and replaying
+    /// hooks for func entry/exit based on whether the intended call was from a component or
+    /// core wasm module.
+    ///
+    /// This method is essentially a wrapper over [`Func::call_unchecked_raw`] and operates exactly like it
+    /// when recording/replay is not enabled, so use this for all calls that will potentially need
+    /// to be recorded/replayed.
+    ///
+    /// `RRWasmFuncType::None` can be used to disable recording/replaying and passthrough to `call_unchecked_raw`.
+    /// Eventually we can replace all occurences of `call_unchecked_raw` with this method with `RRWasmFuncType::None``
+    pub(crate) unsafe fn call_unchecked_raw_with_rr<T>(
+        mut store: &mut StoreContextMut<'_, T>,
+        func_ref: NonNull<VMFuncRef>,
+        params_and_returns: NonNull<[ValRaw]>,
+        rr: RRWasmFuncType,
+    ) -> Result<()> {
+        // SAFETY: the safety of this function call is the same as the contract
+        // of this function.
+        match rr {
+            RRWasmFuncType::Core { ty, origin } => {
+                rr::core_hooks::record_and_replay_validate_wasm_func(
+                    |mut store| {
+                        // SAFETY: the safety of this function call is the same as the contract
+                        // of this function.
+                        unsafe {
+                            Self::call_unchecked_raw(&mut store, func_ref, params_and_returns)
+                        }
+                    },
+                    unsafe { params_and_returns.as_ref() },
+                    ty,
+                    origin,
+                    &mut store,
+                )
+            }
+            #[cfg(feature = "component-model")]
+            RRWasmFuncType::Component { type_idx, types } => {
+                rr::component_hooks::record_and_replay_validate_wasm_func(
+                    |mut store| unsafe {
+                        Self::call_unchecked_raw(&mut store, func_ref, params_and_returns)
+                    },
+                    unsafe { params_and_returns.as_ref() },
+                    type_idx,
+                    types,
+                    &mut store,
+                )
+            }
+            // Passthrough
+            RRWasmFuncType::None => unsafe {
+                Self::call_unchecked_raw(&mut store, func_ref, params_and_returns)
             },
-            unsafe { params_and_returns.as_ref() },
-            &self.ty(&store),
-            self.origin.expand(),
-            &mut store,
-        )
+        }
     }
 
     pub(crate) unsafe fn call_unchecked_raw<T>(
