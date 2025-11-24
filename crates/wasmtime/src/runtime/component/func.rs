@@ -704,12 +704,7 @@ impl Func {
     /// This only works with functions defined within a synchronous store.
     #[inline]
     pub fn post_return(&self, mut store: impl AsContextMut) -> Result<()> {
-        let mut store = store.as_context_mut();
-        component_hooks::record_wasm_func_post_return(
-            self.instance.id().instance(),
-            self.index,
-            &mut store,
-        )?;
+        let store = store.as_context_mut();
         assert!(
             !store.0.async_support(),
             "must use `post_return_async` when async support is enabled on the config"
@@ -738,6 +733,11 @@ impl Func {
 
     fn post_return_impl(&self, mut store: impl AsContextMut) -> Result<()> {
         let mut store = store.as_context_mut();
+        component_hooks::record_wasm_func_post_return(
+            self.instance.id().instance(),
+            self.index,
+            &mut store,
+        )?;
 
         let index = self.index;
         let vminstance = self.instance.id().get(store.0);
