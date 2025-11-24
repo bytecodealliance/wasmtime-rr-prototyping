@@ -193,7 +193,6 @@ impl<T: 'static> ReplayInstance<T> {
     pub fn run_single_top_level_event(&mut self, rr_event: RREvent) -> Result<()> {
         match rr_event {
             RREvent::ComponentInstantiation(event) => {
-                let _ = event;
                 #[cfg(feature = "rr-component")]
                 {
                     // Find matching component from environment to instantiate
@@ -217,13 +216,13 @@ impl<T: 'static> ReplayInstance<T> {
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
+                    let _ = event;
                     bail!(
                         "Cannot parse ComponentInstantation replay event without rr-component feature enabled"
                     );
                 }
             }
             RREvent::ComponentWasmFuncBegin(event) => {
-                let _ = event;
                 #[cfg(feature = "rr-component")]
                 {
                     // Grab the correct component instance
@@ -272,6 +271,7 @@ impl<T: 'static> ReplayInstance<T> {
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
+                    let _ = event;
                     bail!(
                         "Cannot parse ComponentWasmFuncBegin replay event without rr-component feature enabled"
                     );
@@ -294,6 +294,7 @@ impl<T: 'static> ReplayInstance<T> {
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
+                    let _ = event;
                     bail!(
                         "Cannot parse ComponentPostReturn replay event without rr-component feature enabled"
                     );
@@ -365,7 +366,6 @@ impl<T: 'static> ReplayInstance<T> {
     {
         match rr_event {
             RREvent::ComponentInstantiation(event) => {
-                let _ = event;
                 #[cfg(feature = "rr-component")]
                 {
                     // Find matching component from environment to instantiate
@@ -390,13 +390,13 @@ impl<T: 'static> ReplayInstance<T> {
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
+                    let _ = event;
                     bail!(
                         "Cannot parse ComponentInstantation replay event without rr-component feature enabled"
                     );
                 }
             }
             RREvent::ComponentWasmFuncBegin(event) => {
-                let _ = event;
                 #[cfg(feature = "rr-component")]
                 {
                     // Grab the correct component instance
@@ -459,6 +459,7 @@ impl<T: 'static> ReplayInstance<T> {
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
+                    let _ = event;
                     bail!(
                         "Cannot parse ComponentWasmFuncBegin replay event without rr-component feature enabled"
                     );
@@ -481,6 +482,7 @@ impl<T: 'static> ReplayInstance<T> {
                 }
                 #[cfg(not(feature = "rr-component"))]
                 {
+                    let _ = event;
                     bail!(
                         "Cannot parse ComponentPostReturn replay event without rr-component feature enabled"
                     );
