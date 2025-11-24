@@ -11,7 +11,7 @@ use crate::rr::common_events::{HostFuncEntryEvent, WasmFuncReturnEvent};
 #[cfg(feature = "rr-component")]
 use crate::rr::component_events::{
     LowerFlatEntryEvent, LowerFlatReturnEvent, LowerMemoryEntryEvent, LowerMemoryReturnEvent,
-    WasmFuncBeginEvent, WasmFuncEntryEvent,
+    PostReturnEvent, WasmFuncBeginEvent, WasmFuncEntryEvent,
 };
 #[cfg(feature = "rr-component")]
 use crate::rr::{RRFuncArgVals, ResultEvent, common_events::HostFuncReturnEvent};
@@ -43,6 +43,21 @@ pub fn record_wasm_func_begin(
 ) -> Result<()> {
     #[cfg(feature = "rr-component")]
     store.record_event(|| WasmFuncBeginEvent { instance, func_idx })?;
+    let _ = (instance, func_idx, store);
+    Ok(())
+}
+
+/// Record hook for wasm component function post_return call
+#[inline]
+pub fn record_wasm_func_post_return<T>(
+    instance: ComponentInstanceId,
+    func_idx: ExportIndex,
+    store: &mut StoreContextMut<'_, T>,
+) -> Result<()> {
+    #[cfg(feature = "rr-component")]
+    store
+        .0
+        .record_event(|| PostReturnEvent { instance, func_idx })?;
     let _ = (instance, func_idx, store);
     Ok(())
 }

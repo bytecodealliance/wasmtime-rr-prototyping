@@ -26,6 +26,15 @@ pub struct InstantiationEvent {
     pub instance: ComponentInstanceId,
 }
 
+/// A call to `post_return` (after the function call)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostReturnEvent {
+    /// Instance ID for the component instance
+    pub instance: ComponentInstanceId,
+    /// Export index for the function on which post_return is invoked
+    pub func_idx: ExportIndex,
+}
+
 /// A call event from Host into a Wasm component function
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmFuncEntryEvent {

@@ -277,6 +277,28 @@ impl<T: 'static> ReplayInstance<T> {
                     );
                 }
             }
+            RREvent::ComponentPostReturn(event) => {
+                #[cfg(feature = "rr-component")]
+                {
+                    // Grab the correct component instance
+                    let key = event.instance;
+                    let instance = self
+                        .component_instances
+                        .get_mut(&key)
+                        .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
+
+                    let func = component::Func::from_lifted_func(*instance, event.func_idx);
+                    let mut store = self.store.as_context_mut();
+
+                    func.post_return(&mut store)?;
+                }
+                #[cfg(not(feature = "rr-component"))]
+                {
+                    bail!(
+                        "Cannot parse ComponentPostReturn replay event without rr-component feature enabled"
+                    );
+                }
+            }
             RREvent::CoreWasmInstantiation(event) => {
                 // Find matching module from environment to instantiate
                 let module = self
@@ -439,6 +461,28 @@ impl<T: 'static> ReplayInstance<T> {
                 {
                     bail!(
                         "Cannot parse ComponentWasmFuncBegin replay event without rr-component feature enabled"
+                    );
+                }
+            }
+            RREvent::ComponentPostReturn(event) => {
+                #[cfg(feature = "rr-component")]
+                {
+                    // Grab the correct component instance
+                    let key = event.instance;
+                    let instance = self
+                        .component_instances
+                        .get_mut(&key)
+                        .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
+
+                    let func = component::Func::from_lifted_func(*instance, event.func_idx);
+                    let mut store = self.store.as_context_mut();
+
+                    func.post_return_async(&mut store).await?;
+                }
+                #[cfg(not(feature = "rr-component"))]
+                {
+                    bail!(
+                        "Cannot parse ComponentPostReturn replay event without rr-component feature enabled"
                     );
                 }
             }

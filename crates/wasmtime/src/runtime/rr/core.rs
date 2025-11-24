@@ -156,6 +156,8 @@ rr_event! {
     ComponentMemorySliceWrite(__component_events::MemorySliceWriteEvent),
     /// Return from a component builtin
     ComponentBuiltinReturn(__component_events::BuiltinReturnEvent),
+    /// Call to `post_return` (after the function call)
+    ComponentPostReturn(__component_events::PostReturnEvent),
 
     // OPTIONAL events for replay validation (Component)
 
