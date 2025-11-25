@@ -8,7 +8,7 @@ use crate::component::types::ComponentFunc;
 use crate::component::{ComponentNamedList, ComponentType, Instance, Lift, Lower, Val};
 use crate::prelude::*;
 use crate::rr;
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 use crate::rr::component_hooks::ReplayLoweringPhase;
 use crate::runtime::vm::component::{
     ComponentInstance, VMComponentContext, VMLowering, VMLoweringCallee,
@@ -941,7 +941,7 @@ where
             store.0.store_opaque_mut(),
         )?;
         // Replay host function path: Just lower the results from the trace
-        #[cfg(feature = "rr-component")]
+        #[cfg(rr_component)]
         {
             let mut cx = LowerContext::new(store, options, instance);
             // Skip lifting/lowering logic, and just replaying the lowering state
@@ -966,9 +966,11 @@ where
                 }
             }
         }
-        #[cfg(not(feature = "rr-component"))]
+        #[cfg(not(rr_component))]
         {
-            unreachable!("cannot reach host function replay when `rr-component` is disabled");
+            unreachable!(
+                "cannot reach host function replay when rr and component-model is disabled"
+            );
         }
     }
 
@@ -1016,7 +1018,7 @@ unsafe fn dynamic_params_load(
 }
 
 /// Replay of return values from `dynamic_params_load`. Keep in sync
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 unsafe fn dynamic_params_load_replay(param_tys: &TypeTuple, max_flat_params: usize) -> usize {
     if let Some(param_count) = param_tys.abi.flat_count(max_flat_params) {
         param_count

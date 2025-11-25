@@ -1,30 +1,30 @@
 use crate::ValRaw;
 use crate::component::ComponentInstanceId;
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 use crate::rr::{RecordBuffer, Recorder, component_events::MemorySliceWriteEvent};
 
 use core::ops::{Deref, DerefMut};
 
 use crate::component::func::LowerContext;
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 use crate::rr::common_events::{HostFuncEntryEvent, WasmFuncReturnEvent};
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 use crate::rr::component_events::{
     LowerFlatEntryEvent, LowerFlatReturnEvent, LowerMemoryEntryEvent, LowerMemoryReturnEvent,
     PostReturnEvent, WasmFuncBeginEvent, WasmFuncEntryEvent,
 };
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 use crate::rr::{RRFuncArgVals, ResultEvent, common_events::HostFuncReturnEvent};
 use crate::store::StoreOpaque;
 use crate::{StoreContextMut, prelude::*};
 use alloc::sync::Arc;
 use core::mem::MaybeUninit;
 use wasmtime_environ::component::{ComponentTypes, ExportIndex, InterfaceType, TypeFuncIndex};
-#[cfg(all(feature = "rr-component"))]
+#[cfg(all(rr_component))]
 use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 
 /// Indicator type signalling the context during lowering
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 #[derive(Debug)]
 pub enum ReplayLoweringPhase {
     WasmFuncEntry,
@@ -41,7 +41,7 @@ pub fn record_wasm_func_begin(
     func_idx: ExportIndex,
     store: &mut StoreOpaque,
 ) -> Result<()> {
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     store.record_event(|| WasmFuncBeginEvent { instance, func_idx })?;
     let _ = (instance, func_idx, store);
     Ok(())
@@ -54,7 +54,7 @@ pub fn record_wasm_func_post_return<T>(
     func_idx: ExportIndex,
     store: &mut StoreContextMut<'_, T>,
 ) -> Result<()> {
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     store
         .0
         .record_event(|| PostReturnEvent { instance, func_idx })?;
@@ -76,7 +76,7 @@ where
     F: FnOnce(&mut StoreContextMut<'_, T>) -> Result<()>,
 {
     let _ = (args, type_idx, &types);
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     store.0.record_event(|| {
         let flat_params = types.flat_types_storage_or_pointer(
             &InterfaceType::Tuple(types[type_idx].params),
@@ -87,7 +87,7 @@ where
         }
     })?;
     let result = wasm_call(store);
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     {
         if let Err(e) = &result {
             log::warn!("Wasm function call exited with error: {:?}", e);
@@ -108,7 +108,7 @@ where
         result?;
         Ok(())
     }
-    #[cfg(not(feature = "rr-component"))]
+    #[cfg(not(rr_component))]
     {
         result
     }
@@ -122,7 +122,7 @@ pub fn record_validate_host_func_entry(
     param_tys: &InterfaceType,
     store: &mut StoreOpaque,
 ) -> Result<()> {
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     store.record_event_validation(|| create_host_func_entry_event(args, types, param_tys))?;
     let _ = (args, types, param_tys, store);
     Ok(())
@@ -136,7 +136,7 @@ pub fn replay_validate_host_func_entry(
     param_tys: &InterfaceType,
     store: &mut StoreOpaque,
 ) -> Result<()> {
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| {
         create_host_func_entry_event(args, types, param_tys)
     })?;
@@ -152,7 +152,7 @@ pub fn record_host_func_return(
     ty: &InterfaceType,
     store: &mut StoreOpaque,
 ) -> Result<()> {
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     store.record_event(|| {
         let flat_results = types.flat_types_storage_or_pointer(&ty, MAX_FLAT_RESULTS);
         HostFuncReturnEvent {
@@ -174,12 +174,12 @@ pub fn record_lower_memory<F, T>(
 where
     F: FnOnce(&mut LowerContext<'_, T>, InterfaceType, usize) -> Result<()>,
 {
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     cx.store
         .0
         .record_event_validation(|| LowerMemoryEntryEvent { ty, offset })?;
     let store_result = lower_store(cx, ty, offset);
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     cx.store
         .0
         .record_event(|| LowerMemoryReturnEvent(ResultEvent::from_anyhow_result(&store_result)))?;
@@ -196,19 +196,19 @@ pub fn record_lower_flat<F, T>(
 where
     F: FnOnce(&mut LowerContext<'_, T>, InterfaceType) -> Result<()>,
 {
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     cx.store
         .0
         .record_event_validation(|| LowerFlatEntryEvent { ty })?;
     let lower_result = lower(cx, ty);
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     cx.store
         .0
         .record_event(|| LowerFlatReturnEvent(ResultEvent::from_anyhow_result(&lower_result)))?;
     lower_result
 }
 
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 #[inline(always)]
 fn create_host_func_entry_event(
     args: &mut [MaybeUninit<ValRaw>],
@@ -230,9 +230,9 @@ fn create_host_func_entry_event(
 /// of these types.
 pub struct MemorySliceCell<'a> {
     pub bytes: &'a mut [u8],
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     pub offset: usize,
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     pub recorder: Option<&'a mut RecordBuffer>,
 }
 impl<'a> Deref for MemorySliceCell<'a> {
@@ -249,7 +249,7 @@ impl DerefMut for MemorySliceCell<'_> {
 impl Drop for MemorySliceCell<'_> {
     /// Drop serves as a recording hook for stores to the memory slice
     fn drop(&mut self) {
-        #[cfg(feature = "rr-component")]
+        #[cfg(rr_component)]
         if let Some(buf) = &mut self.recorder {
             buf.record_event(|| MemorySliceWriteEvent {
                 offset: self.offset,
@@ -290,9 +290,9 @@ impl Drop for MemorySliceCell<'_> {
 /// [`realloc`](LowerContext::realloc), preventing any interleavings in between the borrow and drop of the slice.
 pub struct ConstMemorySliceCell<'a, const N: usize> {
     pub bytes: &'a mut [u8; N],
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     pub offset: usize,
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     pub recorder: Option<&'a mut RecordBuffer>,
 }
 impl<'a, const N: usize> Deref for ConstMemorySliceCell<'a, N> {
@@ -309,7 +309,7 @@ impl<'a, const N: usize> DerefMut for ConstMemorySliceCell<'a, N> {
 impl<'a, const N: usize> Drop for ConstMemorySliceCell<'a, N> {
     /// Drops serves as a recording hook for stores to the memory slice
     fn drop(&mut self) {
-        #[cfg(feature = "rr-component")]
+        #[cfg(rr_component)]
         if let Some(buf) = &mut self.recorder {
             buf.record_event(|| MemorySliceWriteEvent {
                 offset: self.offset,

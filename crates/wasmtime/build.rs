@@ -33,6 +33,10 @@ fn main() {
     custom_cfg("has_custom_sync", has_custom_sync);
     custom_cfg("has_host_compiler_backend", has_host_compiler_backend);
 
+    // Component model support for record/replay
+    let rr_component = cfg!(feature = "rr") && cfg!(feature = "component-model");
+    custom_cfg("rr_component", rr_component);
+
     // If this OS isn't supported and no debug-builtins or if Cranelift doesn't support
     // the host or there's no need to build these helpers.
     #[cfg(feature = "runtime")]

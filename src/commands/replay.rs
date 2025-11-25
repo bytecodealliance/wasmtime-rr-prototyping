@@ -92,9 +92,8 @@ impl ReplayCommand {
                 renv.add_module(m.clone());
             }
             #[cfg(feature = "component-model")]
-            RunTarget::Component(_c) => {
-                #[cfg(feature = "rr-component")]
-                renv.add_component(_c.clone());
+            RunTarget::Component(c) => {
+                renv.add_component(c.clone());
             }
         }
         let mut replay_instance =

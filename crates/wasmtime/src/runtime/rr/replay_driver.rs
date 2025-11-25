@@ -2,18 +2,18 @@ use crate::rr::Validate;
 use crate::rr::{RREvent, ReplayError, core_events};
 use crate::store::InstanceId;
 use crate::{AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, prelude::*};
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 use crate::{
     ValRaw, component, component::Component, component::ComponentInstanceId, rr::component_events,
     rr::component_hooks,
 };
 use alloc::{collections::BTreeMap, sync::Arc};
-#[cfg(not(feature = "rr-component"))]
+#[cfg(not(rr_component))]
 use anyhow::bail;
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 use core::mem::MaybeUninit;
 use wasmtime_environ::EntityIndex;
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 
 /// The environment necessary to produce a [`ReplayInstance`]
@@ -21,7 +21,7 @@ use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 pub struct ReplayEnvironment {
     engine: Engine,
     modules: BTreeMap<[u8; 32], Module>,
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     components: BTreeMap<[u8; 32], Component>,
     settings: ReplaySettings,
 }
@@ -32,7 +32,7 @@ impl ReplayEnvironment {
         Self {
             engine: engine.clone(),
             modules: BTreeMap::new(),
-            #[cfg(feature = "rr-component")]
+            #[cfg(rr_component)]
             components: BTreeMap::new(),
             settings,
         }
@@ -45,7 +45,7 @@ impl ReplayEnvironment {
     }
 
     /// Add a [`Component`] to the replay environment
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     pub fn add_component(&mut self, component: Component) -> &mut Self {
         self.components.insert(*component.checksum(), component);
         self
@@ -134,11 +134,11 @@ impl ReplayEnvironment {
 pub struct ReplayInstance<T: 'static> {
     env: Arc<ReplayEnvironment>,
     store: Store<T>,
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     component_linker: component::Linker<T>,
     module_linker: crate::Linker<T>,
     module_instances: BTreeMap<InstanceId, crate::Instance>,
-    #[cfg(feature = "rr-component")]
+    #[cfg(rr_component)]
     component_instances: BTreeMap<ComponentInstanceId, component::Instance>,
 }
 
@@ -155,20 +155,20 @@ impl<T: 'static> ReplayInstance<T> {
         for module in env.modules.values() {
             module_linker.define_unknown_imports_as_traps(module)?;
         }
-        #[cfg(feature = "rr-component")]
+        #[cfg(rr_component)]
         let mut component_linker = component::Linker::<T>::new(&env.engine);
-        #[cfg(feature = "rr-component")]
+        #[cfg(rr_component)]
         for component in env.components.values() {
             component_linker.define_unknown_imports_as_traps(component)?;
         }
         Ok(Self {
             env,
             store,
-            #[cfg(feature = "rr-component")]
+            #[cfg(rr_component)]
             component_linker,
             module_linker,
             module_instances: BTreeMap::new(),
-            #[cfg(feature = "rr-component")]
+            #[cfg(rr_component)]
             component_instances: BTreeMap::new(),
         })
     }
@@ -193,7 +193,7 @@ impl<T: 'static> ReplayInstance<T> {
     pub fn run_single_top_level_event(&mut self, rr_event: RREvent) -> Result<()> {
         match rr_event {
             RREvent::ComponentInstantiation(event) => {
-                #[cfg(feature = "rr-component")]
+                #[cfg(rr_component)]
                 {
                     // Find matching component from environment to instantiate
                     let component = self
@@ -214,16 +214,16 @@ impl<T: 'static> ReplayInstance<T> {
                     self.component_instances
                         .insert(instance.id().instance(), instance);
                 }
-                #[cfg(not(feature = "rr-component"))]
+                #[cfg(not(rr_component))]
                 {
                     let _ = event;
                     bail!(
-                        "Cannot parse ComponentInstantation replay event without rr-component feature enabled"
+                        "Cannot parse ComponentInstantation replay event without rr and component-model feature enabled"
                     );
                 }
             }
             RREvent::ComponentWasmFuncBegin(event) => {
-                #[cfg(feature = "rr-component")]
+                #[cfg(rr_component)]
                 {
                     // Grab the correct component instance
                     let key = event.instance;
@@ -269,16 +269,16 @@ impl<T: 'static> ReplayInstance<T> {
                         func
                     );
                 }
-                #[cfg(not(feature = "rr-component"))]
+                #[cfg(not(rr_component))]
                 {
                     let _ = event;
                     bail!(
-                        "Cannot parse ComponentWasmFuncBegin replay event without rr-component feature enabled"
+                        "Cannot parse ComponentWasmFuncBegin replay event without rr and component-model feature enabled"
                     );
                 }
             }
             RREvent::ComponentPostReturn(event) => {
-                #[cfg(feature = "rr-component")]
+                #[cfg(rr_component)]
                 {
                     // Grab the correct component instance
                     let key = event.instance;
@@ -292,11 +292,11 @@ impl<T: 'static> ReplayInstance<T> {
 
                     func.post_return(&mut store)?;
                 }
-                #[cfg(not(feature = "rr-component"))]
+                #[cfg(not(rr_component))]
                 {
                     let _ = event;
                     bail!(
-                        "Cannot parse ComponentPostReturn replay event without rr-component feature enabled"
+                        "Cannot parse ComponentPostReturn replay event without rr and component-model feature enabled"
                     );
                 }
             }
@@ -366,7 +366,7 @@ impl<T: 'static> ReplayInstance<T> {
     {
         match rr_event {
             RREvent::ComponentInstantiation(event) => {
-                #[cfg(feature = "rr-component")]
+                #[cfg(rr_component)]
                 {
                     // Find matching component from environment to instantiate
                     let component = self
@@ -388,16 +388,16 @@ impl<T: 'static> ReplayInstance<T> {
                     self.component_instances
                         .insert(instance.id().instance(), instance);
                 }
-                #[cfg(not(feature = "rr-component"))]
+                #[cfg(not(rr_component))]
                 {
                     let _ = event;
                     bail!(
-                        "Cannot parse ComponentInstantation replay event without rr-component feature enabled"
+                        "Cannot parse ComponentInstantation replay event without rr and component-model feature enabled"
                     );
                 }
             }
             RREvent::ComponentWasmFuncBegin(event) => {
-                #[cfg(feature = "rr-component")]
+                #[cfg(rr_component)]
                 {
                     // Grab the correct component instance
                     let key = event.instance;
@@ -457,16 +457,16 @@ impl<T: 'static> ReplayInstance<T> {
                         func
                     );
                 }
-                #[cfg(not(feature = "rr-component"))]
+                #[cfg(not(rr_component))]
                 {
                     let _ = event;
                     bail!(
-                        "Cannot parse ComponentWasmFuncBegin replay event without rr-component feature enabled"
+                        "Cannot parse ComponentWasmFuncBegin replay event without rr and component-model feature enabled"
                     );
                 }
             }
             RREvent::ComponentPostReturn(event) => {
-                #[cfg(feature = "rr-component")]
+                #[cfg(rr_component)]
                 {
                     // Grab the correct component instance
                     let key = event.instance;
@@ -480,11 +480,11 @@ impl<T: 'static> ReplayInstance<T> {
 
                     func.post_return_async(&mut store).await?;
                 }
-                #[cfg(not(feature = "rr-component"))]
+                #[cfg(not(rr_component))]
                 {
                     let _ = event;
                     bail!(
-                        "Cannot parse ComponentPostReturn replay event without rr-component feature enabled"
+                        "Cannot parse ComponentPostReturn replay event without rr and component-model feature enabled"
                     );
                 }
             }

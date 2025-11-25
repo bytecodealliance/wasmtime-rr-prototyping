@@ -8,7 +8,7 @@ use wasmtime_environ::EntityIndex;
 // so that [`RREvent`] has a well-defined serialization format, but export
 // it for other modules only when enabled
 pub use events::Validate;
-#[cfg(feature = "rr-component")]
+#[cfg(rr_component)]
 pub use events::component_events;
 use events::component_events as __component_events;
 pub use events::{RRFuncArgVals, ResultEvent, common_events, core_events, marker_events};

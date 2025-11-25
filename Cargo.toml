@@ -510,7 +510,6 @@ component-model-async = [
   "dep:futures",
 ]
 rr = ["wasmtime/rr", "wasmtime-cli-flags/rr", "run"]
-rr-component = ["rr", "wasmtime/rr-component"]
 
 # This feature, when enabled, will statically compile out all logging statements
 # throughout Wasmtime and its dependencies.
