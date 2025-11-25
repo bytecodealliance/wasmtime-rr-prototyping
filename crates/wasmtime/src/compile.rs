@@ -26,8 +26,6 @@ use crate::Engine;
 use crate::hash_map::HashMap;
 use crate::hash_set::HashSet;
 use crate::prelude::*;
-#[cfg(feature = "component-model")]
-use sha2::{Digest, Sha256};
 use std::{any::Any, borrow::Cow, collections::BTreeMap, mem, ops::Range};
 
 use call_graph::CallGraph;
@@ -38,7 +36,7 @@ use wasmtime_environ::{
     CompiledFunctionsTableBuilder, CompiledModuleInfo, Compiler, DefinedFuncIndex, FilePos,
     FinishedObject, FuncKey, FunctionBodyData, InliningCompiler, IntraModuleInlining,
     ModuleEnvironment, ModuleTranslation, ModuleTypes, ModuleTypesBuilder, ObjectKind, PrimaryMap,
-    StaticModuleIndex, Tunables,
+    StaticModuleIndex, Tunables, WasmChecksum,
 };
 
 mod call_graph;
@@ -208,7 +206,7 @@ pub(crate) fn build_component_artifacts<T: FinishedObject>(
         ty,
         types,
         static_modules: compilation_artifacts.modules,
-        checksum: Sha256::digest(binary).into(),
+        checksum: WasmChecksum::from_binary(binary),
     };
     object.serialize_info(&artifacts);
 

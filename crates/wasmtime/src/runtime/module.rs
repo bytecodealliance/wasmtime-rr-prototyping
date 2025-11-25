@@ -22,7 +22,7 @@ use wasmparser::{Parser, ValidPayload, Validator};
 use wasmtime_environ::FrameTable;
 use wasmtime_environ::{
     CompiledFunctionsTable, CompiledModuleInfo, EntityIndex, HostPtr, ModuleTypes, ObjectKind,
-    TypeTrace, VMOffsets, VMSharedTypeIndex,
+    TypeTrace, VMOffsets, VMSharedTypeIndex, WasmChecksum,
 };
 #[cfg(feature = "gc")]
 use wasmtime_unwinder::ExceptionTable;
@@ -162,8 +162,8 @@ struct ModuleInner {
     /// Runtime offset information for `VMContext`.
     offsets: VMOffsets<HostPtr>,
 
-    /// The SHA-256 checksum of the source binary
-    checksum: [u8; 32],
+    /// The checksum of the source binary from which this module was compiled.
+    checksum: WasmChecksum,
 }
 
 impl fmt::Debug for Module {
@@ -900,7 +900,7 @@ impl Module {
         reason = "used only for verification with wasmtime `rr` feature \
         and requires a lot of unnecessary gating across crates"
     )]
-    pub(crate) fn checksum(&self) -> &[u8; 32] {
+    pub(crate) fn checksum(&self) -> &WasmChecksum {
         &self.inner.checksum
     }
 

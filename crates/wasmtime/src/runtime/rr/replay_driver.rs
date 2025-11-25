@@ -12,17 +12,17 @@ use alloc::{collections::BTreeMap, sync::Arc};
 use anyhow::bail;
 #[cfg(rr_component)]
 use core::mem::MaybeUninit;
-use wasmtime_environ::EntityIndex;
 #[cfg(rr_component)]
 use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
+use wasmtime_environ::{EntityIndex, WasmChecksum};
 
 /// The environment necessary to produce a [`ReplayInstance`]
 #[derive(Clone)]
 pub struct ReplayEnvironment {
     engine: Engine,
-    modules: BTreeMap<[u8; 32], Module>,
+    modules: BTreeMap<WasmChecksum, Module>,
     #[cfg(rr_component)]
-    components: BTreeMap<[u8; 32], Component>,
+    components: BTreeMap<WasmChecksum, Component>,
     settings: ReplaySettings,
 }
 
@@ -106,7 +106,7 @@ impl ReplayEnvironment {
 ///
 /// # let writer: Cursor<Vec<u8>> = Cursor::new(Vec::new());
 /// # let mut store = Store::new(&engine, ());
-/// # store.init_recording(writer, record_settings)?;
+/// # store.record(writer, record_settings)?;
 ///
 /// # let instance = linker.instantiate(&mut store, &component)?;
 /// # let func = instance.get_typed_func::<(), (u32,)>(&mut store, "main")?;
@@ -190,7 +190,7 @@ impl<T: 'static> ReplayInstance<T> {
     /// * Wasm function begin events (`ComponentWasmFuncBegin` for components and `CoreWasmFuncEntry` for core)
     ///
     /// All other events are transparently dispatched under the context of these top-level events
-    pub fn run_single_top_level_event(&mut self, rr_event: RREvent) -> Result<()> {
+    fn run_single_top_level_event(&mut self, rr_event: RREvent) -> Result<()> {
         match rr_event {
             RREvent::ComponentInstantiation(event) => {
                 #[cfg(rr_component)]
@@ -360,7 +360,7 @@ impl<T: 'static> ReplayInstance<T> {
 
     /// Exactly like [`Self::run_single_top_level_event`] but uses async stores and calls
     #[cfg(feature = "async")]
-    pub async fn run_single_top_level_event_async(&mut self, rr_event: RREvent) -> Result<()>
+    async fn run_single_top_level_event_async(&mut self, rr_event: RREvent) -> Result<()>
     where
         T: Send,
     {

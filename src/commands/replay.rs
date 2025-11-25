@@ -10,31 +10,35 @@ use tokio::time::error::Elapsed;
 use wasmtime::{Engine, ReplayEnvironment, ReplaySettings, Store};
 
 #[derive(Parser)]
-/// Replay-specific options for CLI
+/// Replay-specific options for CLI.
 pub struct ReplayOptions {
-    /// The path of the recorded trace
+    /// The path of the recorded trace.
     ///
-    /// Execution traces can be obtained for most modes of Wasmtime execution with -R.
-    /// See `wasmtime run -R help` for relevant information on recording execution
+    /// Execution traces can be obtained with the -R option on other Wasmtime commands
+    /// (e.g. `wasmtime run` or `wasmtime serve`). See `wasmtime run -R help` for
+    /// relevant information on recording execution.
     ///
-    /// Note: The module used for replay must exactly match that used during recording
+    /// Note: The module used for replay must exactly match that used during recording.
     #[arg(short, long, required = true, value_name = "RECORDED TRACE")]
     pub trace: PathBuf,
 
     /// Dynamic checks of record signatures to validate replay consistency.
     ///
     /// Requires record traces to be generated with `validation_metadata` enabled.
+    /// This resembles an internal "safety" assert and verifies extra non-essential events
+    /// (e.g. return args from Wasm function calls or entry args into host function calls) also
+    /// match during replay. A failed validation will abort the replay run with an error.
     #[arg(short, long, default_value_t = false)]
     pub validate: bool,
 
     /// Size of static buffer needed to deserialized variable-length types like String. This is not
     /// not important for basic functional recording/replaying, but may be required to replay traces where
-    /// `validate` was enabled for recording
+    /// `validate` was enabled for recording.
     #[arg(short, long, default_value_t = 64)]
-    pub deser_buffer_size: usize,
+    pub deserialize_buffer_size: usize,
 }
 
-/// Execute a deterministic, embedding-agnostic replay of a Wasm modules given its associated recorded trace
+/// Execute a deterministic, embedding-agnostic replay of a Wasm modules given its associated recorded trace.
 #[derive(Parser)]
 pub struct ReplayCommand {
     #[command(flatten)]
@@ -68,9 +72,9 @@ impl ReplayCommand {
         })
     }
 
-    /// Execute the store with the replay settings
+    /// Execute the store with the replay settings.
     ///
-    /// Applies similar configurations to `instantiate_and_run`
+    /// Applies similar configurations to `instantiate_and_run`.
     async fn instantiate_and_run_replay(
         self,
         engine: &Engine,
@@ -82,7 +86,7 @@ impl ReplayCommand {
         // the run configurations, but with potentially certain different options (e.g. fuel consumption).
         let settings = ReplaySettings {
             validate: opts.validate,
-            deser_buffer_size: opts.deser_buffer_size,
+            deserialize_buffer_size: opts.deserialize_buffer_size,
             ..Default::default()
         };
 
@@ -112,10 +116,10 @@ impl ReplayCommand {
         })
         .await;
 
-        // Extract the store for error handling below
+        // Extract the store for error handling below.
         let store = replay_instance.extract_store();
 
-        // This is basically the same finish logic as `instantiate_and_run`
+        // This is basically the same finish logic as `instantiate_and_run`.
         match result.unwrap_or_else(|elapsed| {
             Err(anyhow::Error::from(wasmtime::Trap::Interrupt))
                 .with_context(|| format!("timed out after {elapsed}"))

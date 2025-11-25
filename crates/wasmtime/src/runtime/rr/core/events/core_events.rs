@@ -1,12 +1,13 @@
 //! Module comprising of core wasm events
 use super::*;
 use crate::{WasmFuncOrigin, store::InstanceId};
+use wasmtime_environ::WasmChecksum;
 
 /// A core Wasm instantiatation event
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct InstantiationEvent {
     /// Checksum of the bytecode used to instantiate the module
-    pub module: [u8; 32],
+    pub module: WasmChecksum,
     /// Instance ID for the instantiated module
     pub instance: InstanceId,
 }

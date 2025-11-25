@@ -107,6 +107,10 @@ impl NoFunc {
 }
 
 /// Metadata for the origin of a WebAssembly [`Func`]
+///
+/// This type captures minimally enough state about a [`Func`] that
+/// needs to be recorded on host-to-Wasm invocations so that the
+/// it can be reconstructed for replay.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct WasmFuncOrigin {
     /// The instance from which the embedded function belongs to.

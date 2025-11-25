@@ -69,7 +69,7 @@ impl RRFuncArgVals {
         let mut bytes = Vec::new();
         let mut sizes = Vec::new();
         for (flat_size, arg) in flat.zip(args.iter()) {
-            bytes.extend_from_slice(&arg.bytes_ref(flat_size));
+            bytes.extend_from_slice(&arg.bytes(flat_size));
             sizes.push(flat_size);
         }
         RRFuncArgVals { bytes, sizes }
@@ -104,7 +104,9 @@ impl RRFuncArgVals {
         let mut pos = 0;
         let mut vals = Vec::new();
         for (flat_size, val_type) in self.sizes.into_iter().zip(val_types.into_iter()) {
-            let raw = ValRaw::bytes(&self.bytes[pos..pos + flat_size as usize]);
+            let raw = ValRaw::from_bytes(&self.bytes[pos..pos + flat_size as usize]);
+            // SAFETY: The safety contract here is the same as that of [`Val::from_raw`].
+            // The caller must ensure that raw has the type provided.
             vals.push(unsafe { Val::from_raw(&mut store, raw, val_type) });
             pos += flat_size as usize;
         }

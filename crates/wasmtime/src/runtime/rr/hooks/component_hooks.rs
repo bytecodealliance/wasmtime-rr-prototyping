@@ -221,32 +221,32 @@ fn create_host_func_entry_event(
     }
 }
 
-/// Same as [`ConstMemorySliceCell`] except allows for dynamically sized slices.
+/// Same as [`FixedMemorySlice`] except allows for dynamically sized slices.
 ///
 /// Prefer the above for efficiency if slice size is known statically.
 ///
 /// **Note**: The correct operation of this type relies of several invariants.
-/// See [`ConstMemorySliceCell`] for detailed description on the role
+/// See [`FixedMemorySlice`] for detailed description on the role
 /// of these types.
-pub struct MemorySliceCell<'a> {
+pub struct DynamicMemorySlice<'a> {
     pub bytes: &'a mut [u8],
     #[cfg(rr_component)]
     pub offset: usize,
     #[cfg(rr_component)]
     pub recorder: Option<&'a mut RecordBuffer>,
 }
-impl<'a> Deref for MemorySliceCell<'a> {
+impl<'a> Deref for DynamicMemorySlice<'a> {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         self.bytes
     }
 }
-impl DerefMut for MemorySliceCell<'_> {
+impl DerefMut for DynamicMemorySlice<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.bytes
     }
 }
-impl Drop for MemorySliceCell<'_> {
+impl Drop for DynamicMemorySlice<'_> {
     /// Drop serves as a recording hook for stores to the memory slice
     fn drop(&mut self) {
         #[cfg(rr_component)]
@@ -264,7 +264,7 @@ impl Drop for MemorySliceCell<'_> {
 ///
 /// # Purpose and Usage (Read Carefully!)
 ///
-/// This type (and its dynamic counterpart [`MemorySliceCell`]) are critical to
+/// This type (and its dynamic counterpart [`DynamicMemorySlice`]) are critical to
 /// record/replay (RR) support in Wasmtime. In practice, all lowering operations utilize
 /// a [`LowerContext`], which provides a capability to modify guest Wasm module state in
 /// the following ways:
@@ -275,7 +275,7 @@ impl Drop for MemorySliceCell<'_> {
 /// The above are intended to be the narrow waists for recording changes to guest state, and
 /// should be the **only** interfaces used during lowerng. In particular,
 /// [`get`](LowerContext::get)/[`get_dyn`](LowerContext::get_dyn) return
-/// ([`ConstMemorySliceCell`]/[`MemorySliceCell`]), which implement [`Drop`]
+/// ([`FixedMemorySlice`]/[`DynamicMemorySlice`]), which implement [`Drop`]
 /// allowing us a hook to just capture the final aggregate changes made to guest memory by the host.
 ///
 /// ## Critical Invariants
@@ -288,25 +288,25 @@ impl Drop for MemorySliceCell<'_> {
 /// which both take a `&mut self`. Since the latter implements [`Drop`], which also takes a `&mut self`,
 /// the compiler will automatically enforce that drops of this type need to be triggered before a
 /// [`realloc`](LowerContext::realloc), preventing any interleavings in between the borrow and drop of the slice.
-pub struct ConstMemorySliceCell<'a, const N: usize> {
+pub struct FixedMemorySlice<'a, const N: usize> {
     pub bytes: &'a mut [u8; N],
     #[cfg(rr_component)]
     pub offset: usize,
     #[cfg(rr_component)]
     pub recorder: Option<&'a mut RecordBuffer>,
 }
-impl<'a, const N: usize> Deref for ConstMemorySliceCell<'a, N> {
+impl<'a, const N: usize> Deref for FixedMemorySlice<'a, N> {
     type Target = [u8; N];
     fn deref(&self) -> &Self::Target {
         self.bytes
     }
 }
-impl<'a, const N: usize> DerefMut for ConstMemorySliceCell<'a, N> {
+impl<'a, const N: usize> DerefMut for FixedMemorySlice<'a, N> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.bytes
     }
 }
-impl<'a, const N: usize> Drop for ConstMemorySliceCell<'a, N> {
+impl<'a, const N: usize> Drop for FixedMemorySlice<'a, N> {
     /// Drops serves as a recording hook for stores to the memory slice
     fn drop(&mut self) {
         #[cfg(rr_component)]

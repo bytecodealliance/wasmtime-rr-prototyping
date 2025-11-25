@@ -6,7 +6,7 @@ use crate::component::matching::InstanceType;
 use crate::component::resources::{HostResourceData, HostResourceIndex, HostResourceTables};
 use crate::component::{Instance, ResourceType};
 use crate::prelude::*;
-use crate::rr::{ConstMemorySliceCell, MemorySliceCell};
+use crate::rr::{DynamicMemorySlice, FixedMemorySlice};
 #[cfg(rr_component)]
 use crate::rr::{
     RREvent, RecordBuffer, ReplayError, Replayer, ResultEvent, Validate,
@@ -269,7 +269,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     /// This will panic if memory has not been configured for this lowering
     /// (e.g. it wasn't present during the specification of canonical options).
     #[inline]
-    pub fn get<const N: usize>(&mut self, offset: usize) -> ConstMemorySliceCell<'_, N> {
+    pub fn get<const N: usize>(&mut self, offset: usize) -> FixedMemorySlice<'_, N> {
         cfg_if::cfg_if! {
             if #[cfg(rr_component)] {
                 let (slice_mut, recorder) = self.as_slice_mut_with_recorder();
@@ -287,7 +287,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         // For now I figure we can leave in this bounds check and if it becomes
         // an issue we can optimize further later, probably with judicious use
         // of `unsafe`.
-        ConstMemorySliceCell {
+        FixedMemorySlice {
             bytes: slice_mut[offset..].first_chunk_mut().unwrap(),
             #[cfg(rr_component)]
             offset: offset,
@@ -303,7 +303,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     ///
     /// Refer to [`get`](Self::get).
     #[inline]
-    pub fn get_dyn(&mut self, offset: usize, size: usize) -> MemorySliceCell<'_> {
+    pub fn get_dyn(&mut self, offset: usize, size: usize) -> DynamicMemorySlice<'_> {
         cfg_if::cfg_if! {
             if #[cfg(rr_component)] {
                 let (slice_mut, recorder) = self.as_slice_mut_with_recorder();
@@ -311,7 +311,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                 let slice_mut = self.as_slice_mut();
             }
         }
-        MemorySliceCell {
+        DynamicMemorySlice {
             bytes: &mut slice_mut[offset..][..size],
             #[cfg(rr_component)]
             offset: offset,
@@ -505,7 +505,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                 // Realloc or any lowering methods cannot call back to the host. Hence, you cannot
                 // have host calls entries during this method
                 RREvent::HostFuncEntry(_) => {
-                    bail!("Cannot call back into host during lowering")
+                    bail!("Cannot call back into host during lowering");
                 }
                 // Unwrapping should never occur on valid executions since *Entry should be before *Return in trace
                 RREvent::ComponentReallocReturn(e) => {
@@ -525,8 +525,9 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                         lower_store_stack.push(())
                     }
                 }
-
-                _ => bail!("Invalid event \'{:?}\' encountered during lowering", event),
+                _ => {
+                    bail!("Invalid event \'{:?}\' encountered during lowering", event);
+                }
             };
         }
 

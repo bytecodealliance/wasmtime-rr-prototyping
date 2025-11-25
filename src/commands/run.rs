@@ -230,9 +230,9 @@ impl RunCommand {
                         .unwrap_or(default_settings.event_window_size),
                 };
                 if path.trim().is_empty() {
-                    store.init_recording(io::sink(), settings)?;
+                    store.record(io::sink(), settings)?;
                 } else {
-                    store.init_recording(fs::File::create(&path)?, settings)?;
+                    store.record(fs::File::create(&path)?, settings)?;
                 }
             }
         }

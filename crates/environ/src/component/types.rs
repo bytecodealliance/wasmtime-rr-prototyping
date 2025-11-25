@@ -379,7 +379,7 @@ impl ComponentTypes {
     /// The intention of this method is to determine the flat ABI on host-to-wasm
     /// transitions (return from hostcall, or entry into wasmcall). When the type is
     /// not encodable in flat types, the values are all lowered to memory, implied by
-    /// the pointer storage
+    /// the pointer storage.
     pub fn flat_types_storage_or_pointer(
         &self,
         ty: &InterfaceType,
@@ -391,6 +391,7 @@ impl ComponentTypes {
         );
         self.flat_types_storage_inner(ty, limit).unwrap_or_else(|| {
             let mut flat = FlatTypesStorage::new();
+            // Pointer representation for wasm32 and wasm64 respectively
             flat.push(FlatType::I32, FlatType::I64);
             flat
         })

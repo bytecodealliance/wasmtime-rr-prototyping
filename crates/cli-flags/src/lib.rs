@@ -501,7 +501,7 @@ wasmtime_option_group! {
     #[derive(PartialEq, Clone, Deserialize)]
     #[serde(rename_all = "kebab-case", deny_unknown_fields)]
     pub struct RecordOptions {
-        /// Filesystem endpoint to store the recorded execution trace (empty string "" for void endpoint)
+        /// Filename for the recorded execution trace (or empty string to skip writing a file).
         pub path: Option<String>,
         /// Include (optional) signatures to facilitate validation checks during replay
         /// (see `wasmtime replay` for details).
@@ -568,12 +568,12 @@ pub struct CommonOptions {
 
     /// Options to enable and configure execution recording, `-R help` to see all.
     ///
-    /// Generates of a serialized trace of the Wasm module execution that captures all
+    /// Generates a serialized trace of the Wasm module execution that captures all
     /// non-determinism observable by the module. This trace can subsequently be
     /// re-executed in a determinstic, embedding-agnostic manner (see the `wasmtime replay` command).
     ///
-    /// Note: Minimal configs for deterministic Wasm semantics will be
-    /// enforced during recording by default (NaN canonicalization, deterministic relaxed SIMD)
+    /// Note: Minimal configuration options for deterministic Wasm semantics will be
+    /// enforced during recording by default (NaN canonicalization, deterministic relaxed SIMD).
     #[arg(short = 'R', long = "record", value_name = "KEY[=VAL[,..]]")]
     #[serde(skip)]
     record_raw: Vec<opt::CommaSeparated<Record>>,

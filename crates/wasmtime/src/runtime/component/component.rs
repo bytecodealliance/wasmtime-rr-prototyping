@@ -20,7 +20,7 @@ use wasmtime_environ::component::{
     GlobalInitializer, InstantiateModule, NameMapNoIntern, OptionsIndex, StaticModuleIndex,
     TrampolineIndex, TypeComponentIndex, TypeFuncIndex, UnsafeIntrinsic, VMComponentOffsets,
 };
-use wasmtime_environ::{Abi, CompiledFunctionsTable, FuncKey, TypeTrace};
+use wasmtime_environ::{Abi, CompiledFunctionsTable, FuncKey, TypeTrace, WasmChecksum};
 use wasmtime_environ::{FunctionLoc, HostPtr, ObjectKind, PrimaryMap};
 
 /// A compiled WebAssembly Component.
@@ -95,8 +95,8 @@ struct ComponentInner {
     /// locks when calling `realloc` via `TypedFunc::call_raw`.
     realloc_func_type: Arc<FuncType>,
 
-    /// The SHA-256 checksum of the source binary
-    checksum: [u8; 32],
+    /// The checksum of the source binary from which the module was compiled.
+    checksum: WasmChecksum,
 }
 
 pub(crate) struct AllCallFuncPointers {
@@ -875,7 +875,7 @@ impl Component {
         reason = "used only for verification with wasmtime `rr` feature \
         and requires a lot of unnecessary gating across crates"
     )]
-    pub(crate) fn checksum(&self) -> &[u8; 32] {
+    pub(crate) fn checksum(&self) -> &WasmChecksum {
         &self.inner.checksum
     }
 

@@ -1,6 +1,7 @@
 //! Definitions of runtime structures and metadata which are serialized into ELF
 //! with `postcard` as part of a module's compilation process.
 
+use crate::WasmChecksum;
 use crate::prelude::*;
 use crate::{
     CompiledModuleInfo, DebugInfoData, FunctionName, MemoryInitialization, Metadata,
@@ -9,7 +10,6 @@ use crate::{
 use anyhow::{Result, bail};
 use object::SectionKind;
 use object::write::{Object, SectionId, StandardSegment, WritableBuffer};
-use sha2::{Digest, Sha256};
 use std::ops::Range;
 
 /// Helper structure to create an ELF file as a compilation artifact.
@@ -222,7 +222,7 @@ impl<'a> ObjectBuilder<'a> {
                 has_wasm_debuginfo: self.tunables.parse_wasm_debuginfo,
                 dwarf,
             },
-            checksum: Sha256::digest(wasm).into(),
+            checksum: WasmChecksum::from_binary(wasm),
         })
     }
 

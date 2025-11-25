@@ -92,7 +92,7 @@ impl Default for ModuleVersionStrategy {
 impl core::hash::Hash for ModuleVersionStrategy {
     fn hash<H: core::hash::Hasher>(&self, hasher: &mut H) {
         match self {
-            Self::WasmtimeVersion => env!("CARGO_PKG_VERSION_MAJOR").hash(hasher),
+            Self::WasmtimeVersion => env!("CARGO_PKG_VERSION").hash(hasher),
             Self::Custom(s) => s.hash(hasher),
             Self::None => {}
         };

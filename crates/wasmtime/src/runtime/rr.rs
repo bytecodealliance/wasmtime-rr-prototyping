@@ -11,33 +11,33 @@ use ::core::mem::MaybeUninit;
     reason = "trait used as a bound for hooks despite not calling methods directly"
 )]
 pub trait FlatBytes {
-    fn bytes_ref(&self, size: u8) -> &[u8];
+    fn bytes(&self, size: u8) -> &[u8];
     fn from_bytes(value: &[u8]) -> Self;
 }
 
 impl FlatBytes for ValRaw {
     #[inline]
-    fn bytes_ref(&self, size: u8) -> &[u8] {
+    fn bytes(&self, size: u8) -> &[u8] {
         &self.get_bytes()[..size as usize]
     }
     #[inline]
     fn from_bytes(value: &[u8]) -> Self {
-        ValRaw::bytes(value)
+        ValRaw::from_bytes(value)
     }
 }
 
 impl FlatBytes for MaybeUninit<ValRaw> {
     #[inline]
-    fn bytes_ref(&self, size: u8) -> &[u8] {
+    fn bytes(&self, size: u8) -> &[u8] {
         // Uninitialized data is assumed and serialized, so hence
         // may contain some undefined values. But these are irrelevant
         // when serializing to `RRFuncArgVals`
         let val = unsafe { self.assume_init_ref() };
-        val.bytes_ref(size)
+        val.bytes(size)
     }
     #[inline]
     fn from_bytes(value: &[u8]) -> Self {
-        MaybeUninit::new(ValRaw::bytes(value))
+        MaybeUninit::new(ValRaw::from_bytes(value))
     }
 }
 
@@ -46,7 +46,7 @@ mod hooks;
 pub(crate) use hooks::{RRWasmFuncType, core_hooks};
 #[cfg(feature = "component-model")]
 pub(crate) use hooks::{
-    component_hooks, component_hooks::ConstMemorySliceCell, component_hooks::MemorySliceCell,
+    component_hooks, component_hooks::DynamicMemorySlice, component_hooks::FixedMemorySlice,
 };
 
 /// Core infrastructure for RR support

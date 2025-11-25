@@ -112,7 +112,7 @@ where
         add_validation: validate,
         ..Default::default()
     };
-    store.init_recording(writer, record_settings)?;
+    store.record(writer, record_settings)?;
 
     let instance = if is_async {
         linker.instantiate_async(&mut store, &module).await?
@@ -220,7 +220,7 @@ where
         add_validation: validate,
         ..Default::default()
     };
-    store.init_recording(writer, record_settings)?;
+    store.record(writer, record_settings)?;
 
     let instance = if is_async {
         linker.instantiate_async(&mut store, &component).await?

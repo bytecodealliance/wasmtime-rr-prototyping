@@ -900,13 +900,12 @@ impl<T> Store<T> {
         }
     }
 
-    /// Consumes this [`Store`], destroying it and obtain
+    /// Consumes this [`Store`], destroying it and obtaining
     /// the [`RecordWriter`] initialized for recording.
     ///
-    /// ## Notes
-    ///
-    /// The [`RecordWriter`] is never internally updated besides
-    /// with the `init_recording` API
+    /// The intended use case of this method is to "take back" the
+    /// [`RecordWriter`] after all the actions to be recorded within
+    /// the store have been performed.
     #[cfg(feature = "rr")]
     pub fn into_record_writer(mut self) -> Result<Box<dyn RecordWriter>> {
         // See [`Store::into_data`] and the `Drop` implementation of
@@ -1339,16 +1338,12 @@ impl<T> Store<T> {
 
     /// Configure a [`Store`] to enable execution recording
     ///
-    /// This must be initialized before instantiating any module within
-    /// the Store. Recording of events is performed according to provided settings, and
+    /// This must be perfomed before instantiating any module within
+    /// the Store. Events are recorded based on the provided settings, and
     /// written to the provided writer.
     #[cfg(feature = "rr")]
-    pub fn init_recording(
-        &mut self,
-        recorder: impl RecordWriter,
-        settings: RecordSettings,
-    ) -> Result<()> {
-        self.inner.init_recording(recorder, settings)
+    pub fn record(&mut self, recorder: impl RecordWriter, settings: RecordSettings) -> Result<()> {
+        self.inner.record(recorder, settings)
     }
 
     /// Configure a [`Store`] to enable execution replaying
@@ -1356,6 +1351,11 @@ impl<T> Store<T> {
     /// This must be initialized before instantiating any module within
     /// the Store. Replay of events is performed according to provided settings, and
     /// read from the provided reader.
+    ///
+    /// ## Note
+    ///
+    /// This is not a public API; replay executions are wrapped by the `ReplayEnvironment`
+    /// and `ReplayInstance` abstraction.
     #[cfg(feature = "rr")]
     pub(crate) fn init_replaying(
         &mut self,
@@ -1875,11 +1875,7 @@ impl StoreOpaque {
     }
 
     #[cfg(feature = "rr")]
-    pub fn init_recording(
-        &mut self,
-        recorder: impl RecordWriter,
-        settings: RecordSettings,
-    ) -> Result<()> {
+    pub fn record(&mut self, recorder: impl RecordWriter, settings: RecordSettings) -> Result<()> {
         ensure!(
             self.instance_count == 0,
             "store recording must be initialized before instantiating any modules or components"

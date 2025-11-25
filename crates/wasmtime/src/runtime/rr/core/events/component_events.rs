@@ -4,7 +4,7 @@ use super::*;
 use crate::component::ComponentInstanceId;
 use crate::vm::component::libcalls::ResourceDropRet;
 use wasmtime_environ::{
-    self,
+    self, WasmChecksum,
     component::{ExportIndex, InterfaceType},
 };
 
@@ -21,7 +21,7 @@ pub struct WasmFuncBeginEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct InstantiationEvent {
     /// Checksum of the bytecode used to instantiate the component
-    pub component: [u8; 32],
+    pub component: WasmChecksum,
     /// Instance ID for the instantiated component
     pub instance: ComponentInstanceId,
 }

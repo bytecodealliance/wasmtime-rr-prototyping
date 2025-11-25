@@ -3,7 +3,7 @@ use crate::prelude::*;
 use core::fmt;
 use events::EventError;
 use serde::{Deserialize, Serialize};
-use wasmtime_environ::EntityIndex;
+use wasmtime_environ::{EntityIndex, WasmChecksum};
 // Use component events internally even without feature flags enabled
 // so that [`RREvent`] has a well-defined serialization format, but export
 // it for other modules only when enabled
@@ -38,14 +38,14 @@ pub struct ReplaySettings {
     /// Flag to include additional signatures for replay validation.
     pub validate: bool,
     /// Static buffer size for deserialization of variable-length types (like [String]).
-    pub deser_buffer_size: usize,
+    pub deserialize_buffer_size: usize,
 }
 
 impl Default for ReplaySettings {
     fn default() -> Self {
         Self {
             validate: false,
-            deser_buffer_size: 64,
+            deserialize_buffer_size: 64,
         }
     }
 }
@@ -195,8 +195,8 @@ pub enum ReplayError {
     InvalidEventPosition,
     FailedRead(IOError),
     EventError(Box<dyn EventError>),
-    MissingComponent([u8; 32]),
-    MissingModule([u8; 32]),
+    MissingComponent(WasmChecksum),
+    MissingModule(WasmChecksum),
     MissingComponentInstance(u32),
     MissingModuleInstance(u32),
     InvalidCoreFuncIndex(EntityIndex),
@@ -552,7 +552,7 @@ impl Replayer for ReplayBuffer {
             );
         }
 
-        let deser_buffer = vec![0; settings.deser_buffer_size];
+        let deser_buffer = vec![0; settings.deserialize_buffer_size];
         let reader = Box::new(reader);
 
         Ok(ReplayBuffer {
@@ -996,14 +996,15 @@ mod tests {
         use crate::store::InstanceId;
         use __component_events::InstantiationEvent as ComponentInstantiationEvent;
         use core_events::InstantiationEvent as CoreInstantiationEvent;
+        use wasmtime_environ::WasmChecksum;
 
         let component_event = ComponentInstantiationEvent {
-            component: [0xAB; 32],
+            component: WasmChecksum::from_binary(&[0xAB; 256]),
             instance: ComponentInstanceId::from_u32(42),
         };
 
         let core_event = CoreInstantiationEvent {
-            module: [0xCD; 32],
+            module: WasmChecksum::from_binary(&[0xCD; 256]),
             instance: InstanceId::from_u32(17),
         };
 
