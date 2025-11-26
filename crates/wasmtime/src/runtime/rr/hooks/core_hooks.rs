@@ -39,6 +39,9 @@ where
     #[cfg(feature = "rr")]
     {
         if origin.is_some() {
+            if let Err(e) = &result {
+                log::warn!("Wasm function call exited with error: {:?}", e);
+            }
             let flat = ty.results().map(|t| t.to_wasm_type().byte_size());
             let result = result.map(|_| RRFuncArgVals::from_flat_iter(args, flat));
             store.0.record_event_validation(|| {

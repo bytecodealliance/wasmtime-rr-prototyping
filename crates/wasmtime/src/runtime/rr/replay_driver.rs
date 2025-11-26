@@ -1,18 +1,12 @@
-use crate::rr::Validate;
-use crate::rr::{RREvent, ReplayError, core_events};
+use crate::rr::{RREvent, ReplayError, Validate, core_events};
 use crate::store::InstanceId;
 use crate::{AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, prelude::*};
-#[cfg(rr_component)]
 use crate::{
     ValRaw, component, component::Component, component::ComponentInstanceId, rr::component_events,
     rr::component_hooks,
 };
 use alloc::{collections::BTreeMap, sync::Arc};
-#[cfg(not(rr_component))]
-use anyhow::bail;
-#[cfg(rr_component)]
 use core::mem::MaybeUninit;
-#[cfg(rr_component)]
 use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 use wasmtime_environ::{EntityIndex, WasmChecksum};
 
@@ -21,7 +15,6 @@ use wasmtime_environ::{EntityIndex, WasmChecksum};
 pub struct ReplayEnvironment {
     engine: Engine,
     modules: BTreeMap<WasmChecksum, Module>,
-    #[cfg(rr_component)]
     components: BTreeMap<WasmChecksum, Component>,
     settings: ReplaySettings,
 }
@@ -32,7 +25,6 @@ impl ReplayEnvironment {
         Self {
             engine: engine.clone(),
             modules: BTreeMap::new(),
-            #[cfg(rr_component)]
             components: BTreeMap::new(),
             settings,
         }
@@ -45,7 +37,6 @@ impl ReplayEnvironment {
     }
 
     /// Add a [`Component`] to the replay environment
-    #[cfg(rr_component)]
     pub fn add_component(&mut self, component: Component) -> &mut Self {
         self.components.insert(*component.checksum(), component);
         self
@@ -134,11 +125,9 @@ impl ReplayEnvironment {
 pub struct ReplayInstance<T: 'static> {
     env: Arc<ReplayEnvironment>,
     store: Store<T>,
-    #[cfg(rr_component)]
     component_linker: component::Linker<T>,
     module_linker: crate::Linker<T>,
     module_instances: BTreeMap<InstanceId, crate::Instance>,
-    #[cfg(rr_component)]
     component_instances: BTreeMap<ComponentInstanceId, component::Instance>,
 }
 
@@ -155,20 +144,16 @@ impl<T: 'static> ReplayInstance<T> {
         for module in env.modules.values() {
             module_linker.define_unknown_imports_as_traps(module)?;
         }
-        #[cfg(rr_component)]
         let mut component_linker = component::Linker::<T>::new(&env.engine);
-        #[cfg(rr_component)]
         for component in env.components.values() {
             component_linker.define_unknown_imports_as_traps(component)?;
         }
         Ok(Self {
             env,
             store,
-            #[cfg(rr_component)]
             component_linker,
             module_linker,
             module_instances: BTreeMap::new(),
-            #[cfg(rr_component)]
             component_instances: BTreeMap::new(),
         })
     }
@@ -193,112 +178,90 @@ impl<T: 'static> ReplayInstance<T> {
     fn run_single_top_level_event(&mut self, rr_event: RREvent) -> Result<()> {
         match rr_event {
             RREvent::ComponentInstantiation(event) => {
-                #[cfg(rr_component)]
-                {
-                    // Find matching component from environment to instantiate
-                    let component = self
-                        .env
-                        .components
-                        .get(&event.component)
-                        .ok_or(ReplayError::MissingComponent(event.component))?;
+                // Find matching component from environment to instantiate
+                let component = self
+                    .env
+                    .components
+                    .get(&event.component)
+                    .ok_or(ReplayError::MissingComponent(event.component))?;
 
-                    let instance = self
-                        .component_linker
-                        .instantiate(self.store.as_context_mut(), component)?;
-                    // Validate the instantiation event
-                    event.validate(&component_events::InstantiationEvent {
-                        component: *component.checksum(),
-                        instance: instance.id().instance(),
-                    })?;
+                let instance = self
+                    .component_linker
+                    .instantiate(self.store.as_context_mut(), component)?;
+                // Validate the instantiation event
+                event.validate(&component_events::InstantiationEvent {
+                    component: *component.checksum(),
+                    instance: instance.id().instance(),
+                })?;
 
-                    self.component_instances
-                        .insert(instance.id().instance(), instance);
-                }
-                #[cfg(not(rr_component))]
-                {
-                    let _ = event;
-                    bail!(
-                        "Cannot parse ComponentInstantation replay event without rr and component-model feature enabled"
-                    );
-                }
+                self.component_instances
+                    .insert(instance.id().instance(), instance);
             }
             RREvent::ComponentWasmFuncBegin(event) => {
-                #[cfg(rr_component)]
-                {
-                    // Grab the correct component instance
-                    let key = event.instance;
-                    let instance = self
-                        .component_instances
-                        .get_mut(&key)
-                        .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
+                // Grab the correct component instance
+                let key = event.instance;
+                let instance = self
+                    .component_instances
+                    .get_mut(&key)
+                    .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
 
-                    // Replay lowering steps and obtain raw value arguments to raw function call
-                    let func = component::Func::from_lifted_func(*instance, event.func_idx);
-                    let store = self.store.as_context_mut();
+                // Replay lowering steps and obtain raw value arguments to raw function call
+                let func = component::Func::from_lifted_func(*instance, event.func_idx);
+                let store = self.store.as_context_mut();
 
-                    // Call the function
-                    //
-                    // This is almost a mirror of the usage in [`component::Func::call_impl`]
-                    let mut results_storage = [component::Val::U64(0); MAX_FLAT_RESULTS];
-                    let mut num_results = 0;
-                    let results = &mut results_storage;
-                    let _return = unsafe {
-                        func.call_raw(
-                                store,
-                                |cx, _, dst: &mut MaybeUninit<[MaybeUninit<ValRaw>; MAX_FLAT_PARAMS]>| {
-                                    // For lowering, use replay instead of actual lowering
-                                    let dst: &mut [MaybeUninit<ValRaw>] = dst.assume_init_mut();
-                                    cx.replay_lowering(Some(dst), component_hooks::ReplayLoweringPhase::WasmFuncEntry)
-                                },
-                                |cx, results_ty, src: &[ValRaw; MAX_FLAT_RESULTS]| {
-                                    // Lifting can proceed exactly as normal
-                                    for (result, slot) in
-                                        component::Func::lift_results(cx, results_ty, src, MAX_FLAT_RESULTS)?.zip(results)
-                                    {
-                                        *slot = result?;
-                                        num_results += 1;
-                                    }
-                                    Ok(())
-                                },
+                // Call the function
+                //
+                // This is almost a mirror of the usage in [`component::Func::call_impl`]
+                let mut results_storage = [component::Val::U64(0); MAX_FLAT_RESULTS];
+                let mut num_results = 0;
+                let results = &mut results_storage;
+                let _return = unsafe {
+                    func.call_raw(
+                        store,
+                        |cx, _, dst: &mut MaybeUninit<[MaybeUninit<ValRaw>; MAX_FLAT_PARAMS]>| {
+                            // For lowering, use replay instead of actual lowering
+                            let dst: &mut [MaybeUninit<ValRaw>] = dst.assume_init_mut();
+                            cx.replay_lowering(
+                                Some(dst),
+                                component_hooks::ReplayLoweringPhase::WasmFuncEntry,
+                            )
+                        },
+                        |cx, results_ty, src: &[ValRaw; MAX_FLAT_RESULTS]| {
+                            // Lifting can proceed exactly as normal
+                            for (result, slot) in component::Func::lift_results(
+                                cx,
+                                results_ty,
+                                src,
+                                MAX_FLAT_RESULTS,
                             )?
-                    };
+                            .zip(results)
+                            {
+                                *slot = result?;
+                                num_results += 1;
+                            }
+                            Ok(())
+                        },
+                    )?
+                };
 
-                    log::info!(
-                        "Returned {:?} for calling {:?}",
-                        &results_storage[..num_results],
-                        func
-                    );
-                }
-                #[cfg(not(rr_component))]
-                {
-                    let _ = event;
-                    bail!(
-                        "Cannot parse ComponentWasmFuncBegin replay event without rr and component-model feature enabled"
-                    );
-                }
+                log::info!(
+                    "Returned {:?} for calling {:?}",
+                    &results_storage[..num_results],
+                    func
+                );
             }
             RREvent::ComponentPostReturn(event) => {
-                #[cfg(rr_component)]
-                {
-                    // Grab the correct component instance
-                    let key = event.instance;
-                    let instance = self
-                        .component_instances
-                        .get_mut(&key)
-                        .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
+                // Grab the correct component instance
+                let key = event.instance;
+                let instance = self
+                    .component_instances
+                    .get_mut(&key)
+                    .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
 
-                    let func = component::Func::from_lifted_func(*instance, event.func_idx);
-                    let mut store = self.store.as_context_mut();
+                let func = component::Func::from_lifted_func(*instance, event.func_idx);
+                let mut store = self.store.as_context_mut();
 
-                    func.post_return(&mut store)?;
-                }
-                #[cfg(not(rr_component))]
-                {
-                    let _ = event;
-                    bail!(
-                        "Cannot parse ComponentPostReturn replay event without rr and component-model feature enabled"
-                    );
-                }
+                func.post_return(&mut store)?;
             }
             RREvent::CoreWasmInstantiation(event) => {
                 // Find matching module from environment to instantiate
@@ -366,59 +329,47 @@ impl<T: 'static> ReplayInstance<T> {
     {
         match rr_event {
             RREvent::ComponentInstantiation(event) => {
-                #[cfg(rr_component)]
-                {
-                    // Find matching component from environment to instantiate
-                    let component = self
-                        .env
-                        .components
-                        .get(&event.component)
-                        .ok_or(ReplayError::MissingComponent(event.component))?;
+                // Find matching component from environment to instantiate
+                let component = self
+                    .env
+                    .components
+                    .get(&event.component)
+                    .ok_or(ReplayError::MissingComponent(event.component))?;
 
-                    let instance = self
-                        .component_linker
-                        .instantiate_async(self.store.as_context_mut(), component)
-                        .await?;
-                    // Validate the instantiation event
-                    event.validate(&component_events::InstantiationEvent {
-                        component: *component.checksum(),
-                        instance: instance.id().instance(),
-                    })?;
+                let instance = self
+                    .component_linker
+                    .instantiate_async(self.store.as_context_mut(), component)
+                    .await?;
+                // Validate the instantiation event
+                event.validate(&component_events::InstantiationEvent {
+                    component: *component.checksum(),
+                    instance: instance.id().instance(),
+                })?;
 
-                    self.component_instances
-                        .insert(instance.id().instance(), instance);
-                }
-                #[cfg(not(rr_component))]
-                {
-                    let _ = event;
-                    bail!(
-                        "Cannot parse ComponentInstantation replay event without rr and component-model feature enabled"
-                    );
-                }
+                self.component_instances
+                    .insert(instance.id().instance(), instance);
             }
             RREvent::ComponentWasmFuncBegin(event) => {
-                #[cfg(rr_component)]
-                {
-                    // Grab the correct component instance
-                    let key = event.instance;
-                    let instance = self
-                        .component_instances
-                        .get_mut(&key)
-                        .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
+                // Grab the correct component instance
+                let key = event.instance;
+                let instance = self
+                    .component_instances
+                    .get_mut(&key)
+                    .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
 
-                    // Replay lowering steps and obtain raw value arguments to raw function call
-                    let func = component::Func::from_lifted_func(*instance, event.func_idx);
-                    let mut store = self.store.as_context_mut();
+                // Replay lowering steps and obtain raw value arguments to raw function call
+                let func = component::Func::from_lifted_func(*instance, event.func_idx);
+                let mut store = self.store.as_context_mut();
 
-                    // Call the function
-                    //
-                    // This is almost a mirror of the usage in [`component::Func::call_impl`]
-                    let mut results_storage = [component::Val::U64(0); MAX_FLAT_RESULTS];
-                    let mut num_results = 0;
-                    let results = &mut results_storage;
-                    let _return = store
-                        .on_fiber(|store| unsafe {
-                            func.call_raw(
+                // Call the function
+                //
+                // This is almost a mirror of the usage in [`component::Func::call_impl`]
+                let mut results_storage = [component::Val::U64(0); MAX_FLAT_RESULTS];
+                let mut num_results = 0;
+                let results = &mut results_storage;
+                let _return = store
+                    .on_fiber(|store| unsafe {
+                        func.call_raw(
                                 store.as_context_mut(),
                                     |cx,
                                      _,
@@ -448,45 +399,27 @@ impl<T: 'static> ReplayInstance<T> {
                                         Ok(())
                                     },
                             )
-                        })
-                        .await??;
+                    })
+                    .await??;
 
-                    log::info!(
-                        "Returned {:?} for calling {:?}",
-                        &results_storage[..num_results],
-                        func
-                    );
-                }
-                #[cfg(not(rr_component))]
-                {
-                    let _ = event;
-                    bail!(
-                        "Cannot parse ComponentWasmFuncBegin replay event without rr and component-model feature enabled"
-                    );
-                }
+                log::info!(
+                    "Returned {:?} for calling {:?}",
+                    &results_storage[..num_results],
+                    func
+                );
             }
             RREvent::ComponentPostReturn(event) => {
-                #[cfg(rr_component)]
-                {
-                    // Grab the correct component instance
-                    let key = event.instance;
-                    let instance = self
-                        .component_instances
-                        .get_mut(&key)
-                        .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
+                // Grab the correct component instance
+                let key = event.instance;
+                let instance = self
+                    .component_instances
+                    .get_mut(&key)
+                    .ok_or(ReplayError::MissingComponentInstance(key.as_u32()))?;
 
-                    let func = component::Func::from_lifted_func(*instance, event.func_idx);
-                    let mut store = self.store.as_context_mut();
+                let func = component::Func::from_lifted_func(*instance, event.func_idx);
+                let mut store = self.store.as_context_mut();
 
-                    func.post_return_async(&mut store).await?;
-                }
-                #[cfg(not(rr_component))]
-                {
-                    let _ = event;
-                    bail!(
-                        "Cannot parse ComponentPostReturn replay event without rr and component-model feature enabled"
-                    );
-                }
+                func.post_return_async(&mut store).await?;
             }
             RREvent::CoreWasmInstantiation(event) => {
                 // Find matching module from environment to instantiate

@@ -1,5 +1,5 @@
 use crate::StoreContextMut;
-#[cfg(rr_component)]
+#[cfg(feature = "rr")]
 use crate::ValRaw;
 use crate::component::concurrent::ConcurrentState;
 use crate::component::matching::InstanceType;
@@ -7,7 +7,7 @@ use crate::component::resources::{HostResourceData, HostResourceIndex, HostResou
 use crate::component::{Instance, ResourceType};
 use crate::prelude::*;
 use crate::rr::{DynamicMemorySlice, FixedMemorySlice};
-#[cfg(rr_component)]
+#[cfg(feature = "rr")]
 use crate::rr::{
     RREvent, RecordBuffer, ReplayError, Replayer, ResultEvent, Validate,
     component_events::ReallocEntryEvent, component_events::ReallocReturnEvent,
@@ -19,7 +19,7 @@ use crate::runtime::vm::component::{
 };
 use crate::store::{StoreId, StoreOpaque};
 use alloc::sync::Arc;
-#[cfg(rr_component)]
+#[cfg(feature = "rr")]
 use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::ptr::NonNull;
@@ -126,7 +126,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     }
 
     /// Return the `InstanceFlags` for this context
-    #[cfg(rr_component)]
+    #[cfg(feature = "rr")]
     fn instance_flags(&self) -> InstanceFlags {
         let vminstance = self.instance.id().get(self.store.0);
         let opts = self.options();
@@ -139,7 +139,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     /// # Panics
     ///
     /// See [`as_slice`](Self::as_slice)
-    #[cfg(rr_component)]
+    #[cfg(feature = "rr")]
     fn as_slice_mut_with_recorder(&mut self) -> (&mut [u8], Option<&mut RecordBuffer>) {
         self.instance
             .options_memory_mut_with_recorder(self.store.0, self.options)
@@ -243,7 +243,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         old_align: u32,
         new_size: usize,
     ) -> Result<usize> {
-        #[cfg(rr_component)]
+        #[cfg(feature = "rr")]
         self.store.0.record_event(|| ReallocEntryEvent {
             old_addr: old,
             old_size,
@@ -251,7 +251,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
             new_size,
         })?;
         let result = self.realloc_inner(old, old_size, old_align, new_size);
-        #[cfg(rr_component)]
+        #[cfg(feature = "rr")]
         self.store.0.record_event_validation(|| {
             ReallocReturnEvent(ResultEvent::from_anyhow_result(&result))
         })?;
@@ -271,7 +271,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     #[inline]
     pub fn get<const N: usize>(&mut self, offset: usize) -> FixedMemorySlice<'_, N> {
         cfg_if::cfg_if! {
-            if #[cfg(rr_component)] {
+            if #[cfg(feature = "rr")] {
                 let (slice_mut, recorder) = self.as_slice_mut_with_recorder();
             } else {
                 let slice_mut = self.as_slice_mut();
@@ -289,9 +289,9 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         // of `unsafe`.
         FixedMemorySlice {
             bytes: slice_mut[offset..].first_chunk_mut().unwrap(),
-            #[cfg(rr_component)]
+            #[cfg(feature = "rr")]
             offset: offset,
-            #[cfg(rr_component)]
+            #[cfg(feature = "rr")]
             recorder: recorder,
         }
     }
@@ -305,7 +305,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     #[inline]
     pub fn get_dyn(&mut self, offset: usize, size: usize) -> DynamicMemorySlice<'_> {
         cfg_if::cfg_if! {
-            if #[cfg(rr_component)] {
+            if #[cfg(feature = "rr")] {
                 let (slice_mut, recorder) = self.as_slice_mut_with_recorder();
             } else {
                 let slice_mut = self.as_slice_mut();
@@ -313,9 +313,9 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         }
         DynamicMemorySlice {
             bytes: &mut slice_mut[offset..][..size],
-            #[cfg(rr_component)]
+            #[cfg(feature = "rr")]
             offset: offset,
-            #[cfg(rr_component)]
+            #[cfg(feature = "rr")]
             recorder: recorder,
         }
     }
@@ -418,7 +418,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     /// * It is assumed that this is only invoked at the root lower/store calls
     /// * Panics if invoked while replay is not enabled
     ///
-    #[cfg(rr_component)]
+    #[cfg(feature = "rr")]
     pub fn replay_lowering(
         &mut self,
         mut result_storage: Option<&mut [MaybeUninit<ValRaw>]>,

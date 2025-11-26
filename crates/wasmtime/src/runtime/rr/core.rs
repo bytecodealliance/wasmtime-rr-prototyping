@@ -2,17 +2,13 @@ use crate::config::ModuleVersionStrategy;
 use crate::prelude::*;
 use core::fmt;
 use events::EventError;
+pub use events::{
+    RRFuncArgVals, ResultEvent, Validate, common_events, component_events, core_events,
+    marker_events,
+};
+pub use io::{IOError, RecordWriter, ReplayReader};
 use serde::{Deserialize, Serialize};
 use wasmtime_environ::{EntityIndex, WasmChecksum};
-// Use component events internally even without feature flags enabled
-// so that [`RREvent`] has a well-defined serialization format, but export
-// it for other modules only when enabled
-pub use events::Validate;
-#[cfg(rr_component)]
-pub use events::component_events;
-use events::component_events as __component_events;
-pub use events::{RRFuncArgVals, ResultEvent, common_events, core_events, marker_events};
-pub use io::{IOError, RecordWriter, ReplayReader};
 
 /// Settings for execution recording.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,23 +137,23 @@ rr_event! {
     ///
     /// This is distinguished from `ComponentWasmFuncEntry` as there may
     /// be multiple lowering steps before actually entering the Wasm function
-    ComponentWasmFuncBegin(__component_events::WasmFuncBeginEvent),
+    ComponentWasmFuncBegin(component_events::WasmFuncBeginEvent),
     /// Entry from the host into the Wasm component function
-    ComponentWasmFuncEntry(__component_events::WasmFuncEntryEvent),
+    ComponentWasmFuncEntry(component_events::WasmFuncEntryEvent),
     /// Instantiation of a component
-    ComponentInstantiation(__component_events::InstantiationEvent),
+    ComponentInstantiation(component_events::InstantiationEvent),
     /// Component ABI realloc call in linear wasm memory
-    ComponentReallocEntry(__component_events::ReallocEntryEvent),
+    ComponentReallocEntry(component_events::ReallocEntryEvent),
     /// Return from a type lowering operation
-    ComponentLowerFlatReturn(__component_events::LowerFlatReturnEvent),
+    ComponentLowerFlatReturn(component_events::LowerFlatReturnEvent),
     /// Return from a store during a type lowering operation
-    ComponentLowerMemoryReturn(__component_events::LowerMemoryReturnEvent),
+    ComponentLowerMemoryReturn(component_events::LowerMemoryReturnEvent),
     /// An attempt to obtain a mutable slice into Wasm linear memory
-    ComponentMemorySliceWrite(__component_events::MemorySliceWriteEvent),
+    ComponentMemorySliceWrite(component_events::MemorySliceWriteEvent),
     /// Return from a component builtin
-    ComponentBuiltinReturn(__component_events::BuiltinReturnEvent),
+    ComponentBuiltinReturn(component_events::BuiltinReturnEvent),
     /// Call to `post_return` (after the function call)
-    ComponentPostReturn(__component_events::PostReturnEvent),
+    ComponentPostReturn(component_events::PostReturnEvent),
 
     // OPTIONAL events for replay validation (Component)
 
@@ -166,13 +162,13 @@ rr_event! {
     /// Since realloc is deterministic, ReallocReturn is optional.
     /// Any error is subsumed by the containing LowerReturn/LowerStoreReturn
     /// that triggered realloc
-    ComponentReallocReturn(__component_events::ReallocReturnEvent),
+    ComponentReallocReturn(component_events::ReallocReturnEvent),
     /// Call into type lowering for flat destination
-    ComponentLowerFlatEntry(__component_events::LowerFlatEntryEvent),
+    ComponentLowerFlatEntry(component_events::LowerFlatEntryEvent),
     /// Call into type lowering for memory destination
-    ComponentLowerMemoryEntry(__component_events::LowerMemoryEntryEvent),
+    ComponentLowerMemoryEntry(component_events::LowerMemoryEntryEvent),
     /// Call into a component builtin
-    ComponentBuiltinEntry(__component_events::BuiltinEntryEvent)
+    ComponentBuiltinEntry(component_events::BuiltinEntryEvent)
 }
 
 impl RREvent {
@@ -708,7 +704,7 @@ mod tests {
                     origin: origin.clone(),
                     args: RRFuncArgVals::from_flat_iter(&values, flat_sizes.iter().copied()),
                 })?;
-                recorder.record_event(|| __component_events::WasmFuncEntryEvent {
+                recorder.record_event(|| component_events::WasmFuncEntryEvent {
                     args: RRFuncArgVals::from_flat_iter(
                         &return_values,
                         return_flat_sizes.iter().copied(),
@@ -724,7 +720,7 @@ mod tests {
                 assert!(origin == replay_origin.unwrap());
                 verify_equal_slices(&values, &replay_values, &flat_sizes)?;
 
-                replayer.next_event_and(|event: __component_events::WasmFuncEntryEvent| {
+                replayer.next_event_and(|event: component_events::WasmFuncEntryEvent| {
                     event.args.into_raw_slice(&mut return_replay_values);
                     Ok(())
                 })?;
@@ -735,7 +731,7 @@ mod tests {
 
     #[test]
     fn builtin_event_entry() -> Result<()> {
-        use __component_events::{
+        use component_events::{
             BuiltinEntryEvent, ResourceDropEntryEvent, ResourceEnterCallEntryEvent,
             ResourceExitCallEntryEvent, ResourceTransferBorrowEntryEvent,
             ResourceTransferOwnEntryEvent,
@@ -781,7 +777,7 @@ mod tests {
 
     #[test]
     fn builtin_event_return() -> Result<()> {
-        use __component_events::{
+        use component_events::{
             BuiltinError, BuiltinReturnEvent, ResourceDropReturnEvent, ResourceExitCallReturnEvent,
             ResourceRep32ReturnEvent, ResourceTransferBorrowReturnEvent,
             ResourceTransferOwnReturnEvent,
@@ -870,7 +866,7 @@ mod tests {
 
     #[test]
     fn lower_flat_events() -> Result<()> {
-        use __component_events::{LowerFlatEntryEvent, LowerFlatReturnEvent};
+        use component_events::{LowerFlatEntryEvent, LowerFlatReturnEvent};
         use wasmtime_environ::component::InterfaceType;
 
         let entry = LowerFlatEntryEvent {
@@ -900,7 +896,7 @@ mod tests {
 
     #[test]
     fn lower_memory_events() -> Result<()> {
-        use __component_events::{LowerMemoryEntryEvent, LowerMemoryReturnEvent};
+        use component_events::{LowerMemoryEntryEvent, LowerMemoryReturnEvent};
         use wasmtime_environ::component::InterfaceType;
 
         let entry = LowerMemoryEntryEvent {
@@ -932,7 +928,7 @@ mod tests {
 
     #[test]
     fn realloc_events() -> Result<()> {
-        use __component_events::{ReallocEntryEvent, ReallocReturnEvent};
+        use component_events::{ReallocEntryEvent, ReallocReturnEvent};
 
         let entry = ReallocEntryEvent {
             old_addr: 0x1000,
@@ -967,7 +963,7 @@ mod tests {
 
     #[test]
     fn memory_slice_write_event() -> Result<()> {
-        use __component_events::MemorySliceWriteEvent;
+        use component_events::MemorySliceWriteEvent;
 
         let event = MemorySliceWriteEvent {
             offset: 512,
@@ -994,7 +990,7 @@ mod tests {
     fn instantiation_event() -> Result<()> {
         use crate::component::ComponentInstanceId;
         use crate::store::InstanceId;
-        use __component_events::InstantiationEvent as ComponentInstantiationEvent;
+        use component_events::InstantiationEvent as ComponentInstantiationEvent;
         use core_events::InstantiationEvent as CoreInstantiationEvent;
         use wasmtime_environ::WasmChecksum;
 

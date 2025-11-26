@@ -4,7 +4,6 @@ use crate::{AsContextMut, Val, prelude::*};
 use crate::{ValRaw, ValType};
 use core::fmt;
 use serde::{Deserialize, Serialize};
-#[cfg(rr_component)]
 use wasmtime_environ::component::FlatTypesStorage;
 
 /// A serde compatible representation of errors produced during execution
@@ -76,7 +75,6 @@ impl RRFuncArgVals {
     }
 
     /// Construct [`RRFuncArgVals`] from raw value buffer and a [`FlatTypesStorage`]
-    #[cfg(rr_component)]
     #[inline]
     pub fn from_flat_storage<T>(args: &[T], flat: FlatTypesStorage) -> RRFuncArgVals
     where

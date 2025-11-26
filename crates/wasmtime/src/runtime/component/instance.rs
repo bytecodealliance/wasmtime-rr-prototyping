@@ -8,8 +8,8 @@ use crate::component::{
 use crate::instance::OwnedImports;
 use crate::linker::DefinitionType;
 use crate::prelude::*;
-#[cfg(rr_component)]
-use crate::rr::RecordBuffer;
+#[cfg(feature = "rr")]
+use crate::rr::{RecordBuffer, component_events::InstantiationEvent};
 use crate::runtime::vm::component::{
     CallContexts, ComponentInstance, ResourceTables, TypedResource, TypedResourceIndex,
 };
@@ -530,7 +530,7 @@ impl Instance {
         }
     }
 
-    #[cfg(rr_component)]
+    #[cfg(feature = "rr")]
     pub(crate) fn options_memory_mut_with_recorder<'a>(
         &self,
         store: &'a mut StoreOpaque,
@@ -1080,7 +1080,7 @@ impl<'a> Instantiator<'a> {
 
     /// Convenience helper to return the instance ID of the `ComponentInstance` that's
     /// being instantiated
-    #[cfg(rr_component)]
+    #[cfg(feature = "rr")]
     fn id(&self) -> ComponentInstanceId {
         self.id
     }
@@ -1193,14 +1193,13 @@ impl<T: 'static> InstancePre<T> {
             .allocator()
             .increment_component_instance_count()?;
         let mut instantiator = Instantiator::new(&self.component, store.0, &self.imports);
-        #[cfg(rr_component)]
-        {
-            use crate::rr::component_events::InstantiationEvent;
-            store.0.record_event(|| InstantiationEvent {
-                component: *self.component.checksum(),
-                instance: instantiator.id(),
-            })?;
-        }
+
+        #[cfg(feature = "rr")]
+        store.0.record_event(|| InstantiationEvent {
+            component: *self.component.checksum(),
+            instance: instantiator.id(),
+        })?;
+
         instantiator.run(&mut store).await.map_err(|e| {
             store
                 .engine()

@@ -84,7 +84,7 @@ wasmtime_environ::foreach_builtin_component_function!(define_builtins);
 /// implementation following this submodule.
 mod trampolines {
     use super::{ComponentInstance, VMComponentContext};
-    #[cfg(rr_component)]
+    #[cfg(feature = "rr")]
     use crate::rr::{Replayer, ResultEvent, component_events::*};
     use core::ptr::NonNull;
 
@@ -163,11 +163,11 @@ mod trampolines {
         // main invoke rule with a record/replay hook wrapper around the above invoke rules
         // when `rr_builtin`` is provided
         (@invoke [$rr_entry:ident, $rr_exit:ident] $name:ident($store:ident, $instance:ident,) $($pname:ident)*) => ({
-            #[cfg(not(rr_component))]
+            #[cfg(not(feature = "rr"))]
             {
                 shims!(@invoke $name($store, $instance,) $($pname)*)
             }
-            #[cfg(rr_component)]
+            #[cfg(feature = "rr")]
             {
                 if let Some(buf) = (*$store).replay_buffer_mut() {
                     buf.next_event_validation::<BuiltinEntryEvent, _>(&$rr_entry{ $($pname),* }.into())?;
@@ -186,11 +186,11 @@ mod trampolines {
 
         // same as above rule for builtins *without* a return value
         (@invoke [$rr_entry:ident] $name:ident($store:ident, $instance:ident,) $($pname:ident)*) => ({
-            #[cfg(not(rr_component))]
+            #[cfg(not(feature = "rr"))]
             {
                 shims!(@invoke $name($store, $instance,) $($pname)*)
             }
-            #[cfg(rr_component)]
+            #[cfg(feature = "rr")]
             {
                 if let Some(_buf) = (*$store).replay_buffer_mut() {
                     // Just perform replay validation, if required
