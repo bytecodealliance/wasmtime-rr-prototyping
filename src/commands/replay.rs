@@ -1,6 +1,6 @@
 //! Implementation of the `wasmtime replay` command
 
-use crate::commands::run::RunCommand;
+use crate::commands::run::{Replaying, RunCommand};
 use crate::common::RunTarget;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -59,7 +59,7 @@ impl ReplayCommand {
         runtime.block_on(async {
             self.run_cmd.run.common.init_logging()?;
 
-            let engine = self.run_cmd.new_engine(true)?;
+            let engine = self.run_cmd.new_engine(Replaying::Yes)?;
             let main = self
                 .run_cmd
                 .run

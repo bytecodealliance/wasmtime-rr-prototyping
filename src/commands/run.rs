@@ -12,11 +12,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
-#[cfg(feature = "rr")]
-use std::{fs, io};
 use wasi_common::sync::{Dir, TcpListener, WasiCtxBuilder, ambient_authority};
-#[cfg(feature = "rr")]
-use wasmtime::RecordSettings;
 use wasmtime::{Engine, Func, Module, Store, StoreLimits, Val, ValType};
 use wasmtime_wasi::{WasiCtxView, WasiView};
 
@@ -105,6 +101,76 @@ pub enum CliInstance {
     Component(wasmtime::component::Instance),
 }
 
+/// Flag to indicate whether we are performing a replay run or not.
+pub enum Replaying {
+    /// Replay mode enabled.
+    Yes,
+    /// Replay mode disabled.
+    No,
+}
+
+/// Implementation of record/replay configuration and setup
+#[cfg(feature = "rr")]
+pub mod rr_impl {
+    use super::{Replaying, Result, Store};
+    use std::{fs, io};
+    use wasmtime::{Config, RecordSettings};
+    use wasmtime_cli_flags::RecordOptions;
+
+    /// Setup replay configuration on the given [`Config`]
+    pub fn config_replay(config: &mut Config, replaying: Replaying) {
+        if let Replaying::Yes = replaying {
+            config.rr(wasmtime::RRConfig::Replaying);
+        }
+    }
+
+    /// Setup record configuration on the given [`Store`]
+    pub fn recording_for_store<T: 'static>(
+        store: &mut Store<T>,
+        record: &RecordOptions,
+    ) -> Result<()> {
+        if let Some(path) = &record.path {
+            let default_settings = RecordSettings::default();
+            let settings = RecordSettings {
+                add_validation: record
+                    .validation_metadata
+                    .unwrap_or(default_settings.add_validation),
+                event_window_size: record
+                    .event_window_size
+                    .unwrap_or(default_settings.event_window_size),
+            };
+            if path.trim().is_empty() {
+                store.record(io::sink(), settings)?;
+            } else {
+                store.record(fs::File::create(&path)?, settings)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Implementation of record/replay configuration and setup
+#[cfg(not(feature = "rr"))]
+pub mod rr_impl {
+    use super::{Replaying, Result, Store};
+    use wasmtime::Config;
+    use wasmtime_cli_flags::RecordOptions;
+
+    /// Setup replay configuration on the given [`Config`]
+    pub fn config_replay(config: &mut Config, replaying: Replaying) {
+        let _ = (config, replaying);
+    }
+
+    /// Setup record configuration on the given [`Store`]
+    pub fn recording_for_store<T: 'static>(
+        store: &mut Store<T>,
+        record: &RecordOptions,
+    ) -> Result<()> {
+        let _ = (store, record);
+        Ok(())
+    }
+}
+
 impl RunCommand {
     /// Executes the command.
     #[cfg(feature = "run")]
@@ -117,7 +183,7 @@ impl RunCommand {
         runtime.block_on(async {
             self.run.common.init_logging()?;
 
-            let engine = self.new_engine(false)?;
+            let engine = self.new_engine(Replaying::No)?;
             let main = self
                 .run
                 .load_module(&engine, self.module_and_args[0].as_ref())?;
@@ -130,13 +196,11 @@ impl RunCommand {
     }
 
     /// Creates a new `Engine` with the configuration for this command.
-    pub fn new_engine(&mut self, _is_replaying: bool) -> Result<Engine> {
+    pub fn new_engine(&mut self, replaying: Replaying) -> Result<Engine> {
         let mut config = self.run.common.config(None)?;
         config.async_support(true);
-        #[cfg(feature = "rr")]
-        if _is_replaying {
-            config.rr(wasmtime::RRConfig::Replaying);
-        }
+
+        rr_impl::config_replay(&mut config, replaying);
 
         if self.run.common.wasm.timeout.is_some() {
             config.epoch_interruption(true);
@@ -215,27 +279,7 @@ impl RunCommand {
             store.set_fuel(fuel)?;
         }
 
-        #[cfg(feature = "rr")]
-        {
-            // Recording settings for this execution's store
-            let record = &self.run.common.record;
-            if let Some(path) = &record.path {
-                let default_settings = RecordSettings::default();
-                let settings = RecordSettings {
-                    add_validation: record
-                        .validation_metadata
-                        .unwrap_or(default_settings.add_validation),
-                    event_window_size: record
-                        .event_window_size
-                        .unwrap_or(default_settings.event_window_size),
-                };
-                if path.trim().is_empty() {
-                    store.record(io::sink(), settings)?;
-                } else {
-                    store.record(fs::File::create(&path)?, settings)?;
-                }
-            }
-        }
+        rr_impl::recording_for_store(&mut store, &self.run.common.record)?;
 
         Ok((store, linker))
     }
