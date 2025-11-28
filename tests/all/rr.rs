@@ -49,7 +49,7 @@ fn create_replay_engine(is_async: bool) -> Result<Engine> {
 /// Run a core module test with recording and replay
 fn run_core_module_test<F, R>(module_wat: &str, setup_linker: F, test_fn: R) -> Result<()>
 where
-    F: Fn(&mut Linker<TestState>) -> Result<()>,
+    F: Fn(&mut Linker<TestState>, bool) -> Result<()>,
     R: for<'a> Fn(
         &'a mut Store<TestState>,
         &'a wasmtime::Instance,
@@ -64,7 +64,7 @@ where
 
     // Run with in sync/async mode with/without validation
     for is_async in [false, true] {
-        for validation in [false, true] {
+        for validation in [true, false] {
             let run = async {
                 run_core_module_test_with_validation(
                     module_wat,
@@ -92,7 +92,7 @@ async fn run_core_module_test_with_validation<F, R>(
     is_async: bool,
 ) -> Result<()>
 where
-    F: Fn(&mut Linker<TestState>) -> Result<()>,
+    F: Fn(&mut Linker<TestState>, bool) -> Result<()>,
     R: for<'a> Fn(
         &'a mut Store<TestState>,
         &'a wasmtime::Instance,
@@ -104,7 +104,7 @@ where
     let module = Module::new(&engine, module_wat)?;
 
     let mut linker = Linker::new(&engine);
-    setup_linker(&mut linker)?;
+    setup_linker(&mut linker, is_async)?;
 
     let writer: Cursor<Vec<u8>> = Cursor::new(Vec::new());
     let mut store = Store::new(&engine, TestState::new());
@@ -169,7 +169,7 @@ where
 
     // Run with in sync/async mode with/without validation
     for is_async in [false, true] {
-        for validation in [false, true] {
+        for validation in [true, false] {
             let run = async {
                 run_component_test_with_validation(
                     component_wat,
@@ -275,7 +275,7 @@ fn test_core_module_with_host_double() -> Result<()> {
 
     run_core_module_test(
         module_wat,
-        |linker| {
+        |linker, _| {
             linker.func_wrap("env", "double", |param: i32| param * 2)?;
             Ok(())
         },
@@ -320,7 +320,7 @@ fn test_core_module_with_multiple_host_imports() -> Result<()> {
 
     run_core_module_test(
         module_wat,
-        |linker| {
+        |linker, _| {
             linker.func_wrap("env", "double", |param: i32| param * 2)?;
             linker.func_wrap("env", "complex", |p1: i32, p2: i64| -> (i32, i64, f32) {
                 ((p1 as f32).sqrt() as i32, (p1 * p1) as i64 * p2, 8.66)
@@ -343,6 +343,76 @@ fn test_core_module_with_multiple_host_imports() -> Result<()> {
 }
 
 #[test]
+fn test_core_module_reentrancy() -> Result<()> {
+    let module_wat = r#"
+        (module
+            (import "env" "host_call" (func $host_call (param i32) (result i32)))
+            (func (export "main") (param i32) (result i32)
+                local.get 0
+                call $host_call
+            )
+            (func (export "wasm_callback") (param i32) (result i32)
+                local.get 0
+                i32.const 1
+                i32.add
+            )
+        )
+    "#;
+
+    run_core_module_test(
+        module_wat,
+        |linker, is_async| {
+            if is_async {
+                linker.func_wrap_async(
+                    "env",
+                    "host_call",
+                    |mut caller: wasmtime::Caller<'_, TestState>, (param,): (i32,)| {
+                        Box::new(async move {
+                            let func = caller
+                                .get_export("wasm_callback")
+                                .unwrap()
+                                .into_func()
+                                .unwrap();
+                            let typed = func.typed::<i32, i32>(&caller)?;
+                            typed.call_async(&mut caller, param).await
+                        })
+                    },
+                )?;
+            } else {
+                linker.func_wrap(
+                    "env",
+                    "host_call",
+                    |mut caller: wasmtime::Caller<'_, TestState>,
+                     param: i32|
+                     -> wasmtime::Result<i32> {
+                        let func = caller
+                            .get_export("wasm_callback")
+                            .unwrap()
+                            .into_func()
+                            .unwrap();
+                        let typed = func.typed::<i32, i32>(&caller)?;
+                        typed.call(&mut caller, param)
+                    },
+                )?;
+            }
+            Ok(())
+        },
+        |store, instance, is_async| {
+            Box::pin(async move {
+                let run = instance.get_typed_func::<i32, i32>(&mut *store, "main")?;
+                let result = if is_async {
+                    run.call_async(&mut *store, 42).await?
+                } else {
+                    run.call(&mut *store, 42)?
+                };
+                assert_eq!(result, 43);
+                Ok(())
+            })
+        },
+    )
+}
+
+#[test]
 #[should_panic]
 fn test_recording_panics_for_core_module_memory_export() {
     let module_wat = r#"
@@ -351,7 +421,12 @@ fn test_recording_panics_for_core_module_memory_export() {
         )
     "#;
 
-    run_core_module_test(module_wat, |_| Ok(()), |_, _, _| Box::pin(async { Ok(()) })).unwrap();
+    run_core_module_test(
+        module_wat,
+        |_, _| Ok(()),
+        |_, _, _| Box::pin(async { Ok(()) }),
+    )
+    .unwrap();
 }
 
 // ============================================================================

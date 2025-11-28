@@ -1965,24 +1965,6 @@ impl StoreOpaque {
         }
     }
 
-    /// Process the next replay event from the store's replay buffer
-    ///
-    /// Convenience wrapper around [`Replayer::next_event_and`]
-    #[cfg(feature = "rr")]
-    #[inline]
-    pub(crate) fn next_replay_event_and<T, F>(&mut self, f: F) -> Result<(), ReplayError>
-    where
-        T: TryFrom<RREvent>,
-        ReplayError: From<<T as TryFrom<RREvent>>::Error>,
-        F: FnOnce(T) -> Result<(), ReplayError>,
-    {
-        if let Some(buf) = self.replay_buffer_mut() {
-            buf.next_event_and(f)
-        } else {
-            Ok(())
-        }
-    }
-
     /// Process the next replay event as a validation event from the store's replay buffer
     /// and if validation is enabled on replay, and run the validation check
     ///

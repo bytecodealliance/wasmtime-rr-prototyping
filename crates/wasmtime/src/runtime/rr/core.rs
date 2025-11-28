@@ -346,22 +346,6 @@ pub trait Replayer: Iterator<Item = Result<RREvent, ReplayError>> {
         T::try_from(self.next_event()?).map_err(|e| e.into())
     }
 
-    /// Pop the next replay event and calls `f` with a desired type conversion
-    ///
-    /// ## Errors
-    ///
-    /// See [`next_event_typed`](Replayer::next_event_typed)
-    #[inline]
-    fn next_event_and<T, F>(&mut self, f: F) -> Result<(), ReplayError>
-    where
-        T: TryFrom<RREvent>,
-        ReplayError: From<<T as TryFrom<RREvent>>::Error>,
-        F: FnOnce(T) -> Result<(), ReplayError>,
-    {
-        let call_event = self.next_event_typed()?;
-        Ok(f(call_event)?)
-    }
-
     /// Conditionally process the next validation recorded event and if
     /// replay validation is enabled, run the validation check
     ///
@@ -590,6 +574,18 @@ mod tests {
     use std::path::Path;
     use tempfile::{NamedTempFile, TempPath};
     use wasmtime_environ::FuncIndex;
+
+    impl ReplayBuffer {
+        fn next_event_and<T, F>(&mut self, f: F) -> Result<(), ReplayError>
+        where
+            T: TryFrom<RREvent>,
+            ReplayError: From<<T as TryFrom<RREvent>>::Error>,
+            F: FnOnce(T) -> Result<(), ReplayError>,
+        {
+            let event = self.next_event_typed::<T>()?;
+            f(event)
+        }
+    }
 
     fn rr_harness<S, T>(record_fn: S, replay_fn: T) -> Result<()>
     where

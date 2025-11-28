@@ -43,25 +43,73 @@ impl ReplayEnvironment {
     }
 
     /// Instantiate a new [`ReplayInstance`] using a [`ReplayReader`] in context of this environment
-    pub fn instantiate(&self, reader: impl ReplayReader + 'static) -> Result<ReplayInstance<()>> {
-        let store = Store::new(&self.engine, ());
-        ReplayInstance::<()>::from_environment_and_store(self.clone(), store, reader)
+    pub fn instantiate(&self, reader: impl ReplayReader + 'static) -> Result<ReplayInstance> {
+        self.instantiate_with(reader, |_| Ok(()), |_| Ok(()), |_| Ok(()))
     }
 
-    /// Like [`Self::instantiate`] but allows providing a custom [`Store`] generator
-    pub fn instantiate_with_store<T>(
+    /// Like [`Self::instantiate`] but allows providing a custom modifier functions for
+    /// [`Store`], [`crate::Linker`], and [`component::Linker`] within the replay
+    pub fn instantiate_with(
         &self,
-        store_gen: impl FnOnce() -> Store<T>,
         reader: impl ReplayReader + 'static,
-    ) -> Result<ReplayInstance<T>> {
-        ReplayInstance::from_environment_and_store(self.clone(), store_gen(), reader)
+        store_fn: impl FnOnce(&mut Store<ReplayHostContext>) -> Result<()>,
+        module_linker_fn: impl FnOnce(&mut crate::Linker<ReplayHostContext>) -> Result<()>,
+        component_linker_fn: impl FnOnce(&mut component::Linker<ReplayHostContext>) -> Result<()>,
+    ) -> Result<ReplayInstance> {
+        let mut store = Store::new(
+            &self.engine,
+            ReplayHostContext {
+                module_instances: BTreeMap::new(),
+            },
+        );
+        store_fn(&mut store)?;
+        store.init_replaying(reader, self.settings.clone())?;
+
+        ReplayInstance::from_environment_and_store(
+            self.clone(),
+            store,
+            module_linker_fn,
+            component_linker_fn,
+        )
     }
 }
 
-/// A [`ReplayInstance`] is an object providing a opaquely managed, replayable [`Store`]
+/// The host context tied to the store during replay.
+///
+/// This context encapsulates the state from the replay environment that are
+/// required to be accessible within the Store. This is an opaque type from the
+/// public API perspective.
+pub struct ReplayHostContext {
+    /// A tracker of instantiated modules.
+    ///
+    /// Core wasm modules can be re-entrant and invoke methods from other instances, and this
+    /// needs to be accessible within host functions
+    module_instances: BTreeMap<InstanceId, crate::Instance>,
+}
+
+impl ReplayHostContext {
+    /// Insert a module instance into the context's tracking map.
+    fn insert_module_instance(&mut self, id: InstanceId, instance: crate::Instance) {
+        self.module_instances.insert(id, instance);
+    }
+
+    /// Get a module instance from the context's tracking map
+    ///
+    /// This is necessary for core wasm to identify re-entrant calls during replay.
+    pub(crate) fn get_module_instance(
+        &self,
+        id: InstanceId,
+    ) -> Result<&crate::Instance, ReplayError> {
+        self.module_instances
+            .get(&id)
+            .ok_or(ReplayError::MissingModuleInstance(id.as_u32()))
+    }
+}
+
+/// A [`ReplayInstance`] is an object providing a opaquely managed, replayable [`Store`].
 ///
 /// Debugger capabilities in the future will interact with this object for
-/// inserting breakpoints, snapshotting, and restoring state
+/// inserting breakpoints, snapshotting, and restoring state.
 ///
 /// # Example
 ///
@@ -122,32 +170,36 @@ impl ReplayEnvironment {
 /// # Ok(())
 /// # }
 /// ```
-pub struct ReplayInstance<T: 'static> {
+pub struct ReplayInstance {
     env: Arc<ReplayEnvironment>,
-    store: Store<T>,
-    component_linker: component::Linker<T>,
-    module_linker: crate::Linker<T>,
+    store: Store<ReplayHostContext>,
+    component_linker: component::Linker<ReplayHostContext>,
+    module_linker: crate::Linker<ReplayHostContext>,
     module_instances: BTreeMap<InstanceId, crate::Instance>,
     component_instances: BTreeMap<ComponentInstanceId, component::Instance>,
 }
 
-impl<T: 'static> ReplayInstance<T> {
+impl ReplayInstance {
     fn from_environment_and_store(
         env: ReplayEnvironment,
-        mut store: Store<T>,
-        reader: impl ReplayReader + 'static,
+        store: Store<ReplayHostContext>,
+        module_linker_fn: impl FnOnce(&mut crate::Linker<ReplayHostContext>) -> Result<()>,
+        component_linker_fn: impl FnOnce(&mut component::Linker<ReplayHostContext>) -> Result<()>,
     ) -> Result<Self> {
         let env = Arc::new(env);
-        store.init_replaying(reader, env.settings.clone())?;
-        let mut module_linker = crate::Linker::<T>::new(&env.engine);
+        let mut module_linker = crate::Linker::<ReplayHostContext>::new(&env.engine);
         // Replays shouldn't use any imports, so stub them all out as traps
         for module in env.modules.values() {
             module_linker.define_unknown_imports_as_traps(module)?;
         }
-        let mut component_linker = component::Linker::<T>::new(&env.engine);
+        module_linker_fn(&mut module_linker)?;
+
+        let mut component_linker = component::Linker::<ReplayHostContext>::new(&env.engine);
         for component in env.components.values() {
             component_linker.define_unknown_imports_as_traps(component)?;
         }
+        component_linker_fn(&mut component_linker)?;
+
         Ok(Self {
             env,
             store,
@@ -158,23 +210,23 @@ impl<T: 'static> ReplayInstance<T> {
         })
     }
 
-    /// Obtain a reference to the internal [`Store`]
-    pub fn store(&self) -> &Store<T> {
+    /// Obtain a reference to the internal [`Store`].
+    pub fn store(&self) -> &Store<ReplayHostContext> {
         &self.store
     }
 
-    /// Consume the [`ReplayInstance`] and extract the internal [`Store`]
-    pub fn extract_store(self) -> Store<T> {
+    /// Consume the [`ReplayInstance`] and extract the internal [`Store`].
+    pub fn extract_store(self) -> Store<ReplayHostContext> {
         self.store
     }
 
-    /// Run a single top-level event from the instance
+    /// Run a single top-level event from the instance.
     ///
     /// "Top-level" events are those explicitly invoked events, namely:
     /// * Instantiation events (component/module)
     /// * Wasm function begin events (`ComponentWasmFuncBegin` for components and `CoreWasmFuncEntry` for core)
     ///
-    /// All other events are transparently dispatched under the context of these top-level events
+    /// All other events are transparently dispatched under the context of these top-level events.
     fn run_single_top_level_event(&mut self, rr_event: RREvent) -> Result<()> {
         match rr_event {
             RREvent::ComponentInstantiation(event) => {
@@ -281,7 +333,12 @@ impl<T: 'static> ReplayInstance<T> {
                     instance: instance.id(),
                 })?;
 
+                // Insert into host context tracking as well
                 self.module_instances.insert(instance.id(), instance);
+                self.store
+                    .as_context_mut()
+                    .data_mut()
+                    .insert_module_instance(instance.id(), instance);
             }
             RREvent::CoreWasmFuncEntry(event) => {
                 // Grab the correct module instance
@@ -321,12 +378,9 @@ impl<T: 'static> ReplayInstance<T> {
         Ok(())
     }
 
-    /// Exactly like [`Self::run_single_top_level_event`] but uses async stores and calls
+    /// Exactly like [`Self::run_single_top_level_event`] but uses async stores and calls.
     #[cfg(feature = "async")]
-    async fn run_single_top_level_event_async(&mut self, rr_event: RREvent) -> Result<()>
-    where
-        T: Send,
-    {
+    async fn run_single_top_level_event_async(&mut self, rr_event: RREvent) -> Result<()> {
         match rr_event {
             RREvent::ComponentInstantiation(event) => {
                 // Find matching component from environment to instantiate
@@ -441,6 +495,10 @@ impl<T: 'static> ReplayInstance<T> {
                 })?;
 
                 self.module_instances.insert(instance.id(), instance);
+                self.store
+                    .as_context_mut()
+                    .data_mut()
+                    .insert_module_instance(instance.id(), instance);
             }
             RREvent::CoreWasmFuncEntry(event) => {
                 // Grab the correct module instance
@@ -500,10 +558,7 @@ impl<T: 'static> ReplayInstance<T> {
 
     /// Exactly like [`Self::run_to_completion`] but uses async stores and calls
     #[cfg(feature = "async")]
-    pub async fn run_to_completion_async(&mut self) -> Result<()>
-    where
-        T: Send,
-    {
+    pub async fn run_to_completion_async(&mut self) -> Result<()> {
         while let Some(rr_event) = self
             .store
             .as_context_mut()

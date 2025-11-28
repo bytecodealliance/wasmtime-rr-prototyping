@@ -1,13 +1,13 @@
 //! Implementation of the `wasmtime replay` command
 
-use crate::commands::run::{Host, RunCommand};
+use crate::commands::run::RunCommand;
 use crate::common::RunTarget;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use std::path::PathBuf;
 use std::{fs, io};
 use tokio::time::error::Elapsed;
-use wasmtime::{Engine, ReplayEnvironment, ReplaySettings, Store};
+use wasmtime::{Engine, ReplayEnvironment, ReplaySettings};
 
 #[derive(Parser)]
 /// Replay-specific options for CLI.
@@ -64,10 +64,8 @@ impl ReplayCommand {
                 .run_cmd
                 .run
                 .load_module(&engine, self.run_cmd.module_and_args[0].as_ref())?;
-            let (store, _) = self.run_cmd.new_store_and_linker(&engine, &main)?;
 
-            self.instantiate_and_run_replay(&engine, &main, store)
-                .await?;
+            self.run_replay(&engine, &main).await?;
             Ok(())
         })
     }
@@ -75,13 +73,16 @@ impl ReplayCommand {
     /// Execute the store with the replay settings.
     ///
     /// Applies similar configurations to `instantiate_and_run`.
-    async fn instantiate_and_run_replay(
-        self,
-        engine: &Engine,
-        main: &RunTarget,
-        store: Store<Host>,
-    ) -> Result<()> {
+    async fn run_replay(self, engine: &Engine, main: &RunTarget) -> Result<()> {
         let opts = self.replay_opts;
+
+        // Validate coredump-on-trap argument
+        if let Some(path) = &self.run_cmd.run.common.debug.coredump {
+            if path.contains("%") {
+                bail!("the coredump-on-trap path does not support patterns yet.")
+            }
+        }
+
         // In general, replays will need an "almost exact" superset of
         // the run configurations, but with potentially certain different options (e.g. fuel consumption).
         let settings = ReplaySettings {
@@ -100,8 +101,31 @@ impl ReplayCommand {
                 renv.add_component(c.clone());
             }
         }
-        let mut replay_instance =
-            renv.instantiate_with_store(|| store, io::BufReader::new(fs::File::open(opts.trace)?))?;
+
+        let allow_unknown_exports = self.run_cmd.run.common.wasm.unknown_exports_allow;
+        let mut replay_instance = renv.instantiate_with(
+            io::BufReader::new(fs::File::open(opts.trace)?),
+            |store| {
+                // If fuel has been configured, we want to add the configured
+                // fuel amount to this store.
+                if let Some(fuel) = self.run_cmd.run.common.wasm.fuel {
+                    store.set_fuel(fuel)?;
+                }
+                Ok(())
+            },
+            |module_linker| {
+                if let Some(enable) = allow_unknown_exports {
+                    module_linker.allow_unknown_exports(enable);
+                }
+                Ok(())
+            },
+            |_component_linker| {
+                if allow_unknown_exports.is_some() {
+                    bail!("--allow-unknown-exports not supported with components");
+                }
+                Ok(())
+            },
+        )?;
 
         let dur = self
             .run_cmd
@@ -116,9 +140,6 @@ impl ReplayCommand {
         })
         .await;
 
-        // Extract the store for error handling below.
-        let store = replay_instance.extract_store();
-
         // This is basically the same finish logic as `instantiate_and_run`.
         match result.unwrap_or_else(|elapsed| {
             Err(anyhow::Error::from(wasmtime::Trap::Interrupt))
@@ -126,18 +147,8 @@ impl ReplayCommand {
         }) {
             Ok(_) => Ok(()),
             Err(e) => {
-                // Exit the process if Wasmtime understands the error;
-                // otherwise, fall back on Rust's default error printing/return
-                // code.
-                if store.data().legacy_p1_ctx.is_some() {
-                    return Err(wasi_common::maybe_exit_on_error(e));
-                } else if store.data().wasip1_ctx.is_some() {
-                    if let Some(exit) = e.downcast_ref::<wasmtime_wasi::I32Exit>() {
-                        std::process::exit(exit.0);
-                    }
-                }
                 if e.is::<wasmtime::Trap>() {
-                    eprintln!("Error: {e:?}");
+                    eprintln!("Error returned from replay: {e:?}");
                     cfg_if::cfg_if! {
                         if #[cfg(unix)] {
                             std::process::exit(rustix::process::EXIT_SIGNALED_SIGABRT);

@@ -1388,7 +1388,7 @@ impl Func {
                 flat_params,
                 &mut caller.store.0,
             )?;
-            rr::core_hooks::replay_host_func_return(values_vec, &mut caller.store.0)?;
+            rr::core_hooks::replay_host_func_return(values_vec, &mut caller)?;
         }
 
         // Restore our `val_vec` back into the store so it's usable for the next
@@ -2544,7 +2544,7 @@ impl HostContext {
                 // Replay the return values
                 rr::core_hooks::replay_host_func_return(
                     unsafe { &mut args.as_mut()[..num_results] },
-                    caller.store.0,
+                    &mut caller,
                 )?;
             }
 
