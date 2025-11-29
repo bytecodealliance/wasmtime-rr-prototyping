@@ -68,7 +68,7 @@ impl RRFuncArgVals {
         let mut bytes = Vec::new();
         let mut sizes = Vec::new();
         for (flat_size, arg) in flat.zip(args.iter()) {
-            bytes.extend_from_slice(&arg.bytes(flat_size));
+            bytes.extend_from_slice(unsafe { &arg.bytes(flat_size) });
             sizes.push(flat_size);
         }
         RRFuncArgVals { bytes, sizes }

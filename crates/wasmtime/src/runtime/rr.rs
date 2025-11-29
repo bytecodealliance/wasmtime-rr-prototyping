@@ -2,7 +2,7 @@
 //!
 //! This feature is currently not optimized and under development
 use crate::ValRaw;
-use ::core::mem::MaybeUninit;
+use ::core::{mem::MaybeUninit, slice};
 
 /// Component-async-ABI is not supported for record/replay yet; add a feature gate
 //const _: () = {
@@ -19,13 +19,13 @@ use ::core::mem::MaybeUninit;
     reason = "trait used as a bound for hooks despite not calling methods directly"
 )]
 pub trait FlatBytes {
-    fn bytes(&self, size: u8) -> &[u8];
+    unsafe fn bytes(&self, size: u8) -> &[u8];
     fn from_bytes(value: &[u8]) -> Self;
 }
 
 impl FlatBytes for ValRaw {
     #[inline]
-    fn bytes(&self, size: u8) -> &[u8] {
+    unsafe fn bytes(&self, size: u8) -> &[u8] {
         &self.get_bytes()[..size as usize]
     }
     #[inline]
@@ -36,12 +36,20 @@ impl FlatBytes for ValRaw {
 
 impl FlatBytes for MaybeUninit<ValRaw> {
     #[inline]
-    fn bytes(&self, size: u8) -> &[u8] {
-        // Uninitialized data is assumed and serialized, so hence
-        // may contain some undefined values. But these are irrelevant
-        // when serializing to `RRFuncArgVals`
-        let val = unsafe { self.assume_init_ref() };
-        val.bytes(size)
+    /// SAFETY: the caller must ensure that 'size' number of bytes provided
+    /// are initialized for the underlying ValRaw.
+    /// When serializing for record/replay, uninitialized parts of the ValRaw
+    /// are not relevant, so this only accesses initialized values as long as
+    /// the size contract is upheld.
+    unsafe fn bytes(&self, size: u8) -> &[u8] {
+        // The cleanest way for this would use MaybeUninit::as_bytes and an assume_init(),
+        // but that is currently only available in nightly.
+        let ptr = self.as_ptr().cast::<MaybeUninit<u8>>();
+        // SAFETY: the caller must ensure that 'size' bytes are initialized
+        unsafe {
+            let s = slice::from_raw_parts(ptr, size as usize);
+            &*(s as *const [MaybeUninit<u8>] as *const [u8])
+        }
     }
     #[inline]
     fn from_bytes(value: &[u8]) -> Self {
