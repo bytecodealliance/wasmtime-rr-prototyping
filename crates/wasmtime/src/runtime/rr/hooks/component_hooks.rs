@@ -127,6 +127,7 @@ pub fn record_validate_host_func_entry(
 
 /// Replay hook operation for host function entry events
 #[inline]
+#[cfg(feature = "rr")]
 pub fn replay_validate_host_func_entry(
     args: &mut [MaybeUninit<ValRaw>],
     types: &Arc<ComponentTypes>,

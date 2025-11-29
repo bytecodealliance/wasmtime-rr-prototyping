@@ -81,6 +81,9 @@ pub use self::types_builder::*;
 
 /// Helper macro, like `foreach_transcoder`, to iterate over builtins for
 /// components unrelated to transcoding.
+///
+/// Note: RR is not supported for component model async builtins yet; enabling
+/// both will currently throw a compile error.
 #[macro_export]
 macro_rules! foreach_builtin_component_function {
     ($mac:ident) => {

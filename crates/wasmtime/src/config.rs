@@ -2928,6 +2928,7 @@ impl Config {
                 bail!("Relaxed deterministic SIMD cannot be disabled when determinism is enforced");
             }
         }
+        #[cfg(any(feature = "cranelift", feature = "winch"))]
         if let Some(v) = self
             .compiler_config
             .settings

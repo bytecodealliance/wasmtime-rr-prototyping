@@ -2449,9 +2449,8 @@ impl HostContext {
         // Note that this function is intentionally scoped into a
         // separate closure to fit everything inside `enter_host_from_wasm`
         // below.
-        let run = move |mut caller: Caller<'_, T>| {
-            let mut args =
-                NonNull::slice_from_raw_parts(args.cast::<MaybeUninit<ValRaw>>(), args_len);
+        let run = move |caller: Caller<'_, T>| {
+            let args = NonNull::slice_from_raw_parts(args.cast::<MaybeUninit<ValRaw>>(), args_len);
             // SAFETY: it's a safety contract of this function itself that
             // `callee_vmctx` is safe to read.
             let state = unsafe {
@@ -2484,71 +2483,30 @@ impl HostContext {
                 wasm_func_type.returns().into_iter().map(|x| x.byte_size()),
             );
 
-            if !caller.store.0.replay_enabled() {
-                // Don't need auto-assert GC store here since we aren't using P, just raw args for recording
-                rr::core_hooks::record_validate_host_func_entry(
-                    unsafe { &args.as_ref()[..num_params] },
-                    flat_size_params,
-                    caller.store.0,
-                )?;
-                let ret = 'ret: {
-                    if let Err(trap) = caller.store.0.call_hook(CallHook::CallingHost) {
-                        break 'ret R::fallible_from_error(trap);
-                    }
-                    // Setup call parameters
-                    let params = {
-                        let mut store = if P::may_gc() {
-                            AutoAssertNoGc::new(caller.store.0)
-                        } else {
-                            unsafe { AutoAssertNoGc::disabled(caller.store.0) }
-                        };
-                        // SAFETY: this function requires `args` to be valid and the
-                        // `WasmTyList` trait means that everything should be correctly
-                        // ascribed/typed, making this valid to load from.
-                        unsafe { P::load(&mut store, args.as_mut()) }
-                        // Drop on store is necessary here; scope closure makes this implicit
-                    };
-                    let r = func(caller.sub_caller(), params);
-                    if let Err(trap) = caller.store.0.call_hook(CallHook::ReturningFromHost) {
-                        break 'ret R::fallible_from_error(trap);
-                    }
-                    r.into_fallible()
-                };
-
-                if !ret.compatible_with_store(caller.store.0) {
-                    bail!("host function attempted to return cross-`Store` value to Wasm")
+            unsafe {
+                // This top-level switch determines whether or not we're in replay mode or
+                // not. In replay mode, we skip execution of host functions and
+                // just replay the return value effects observed in the trace
+                if caller.store.0.replay_enabled() {
+                    Self::array_call_trampoline_replay(
+                        caller,
+                        args,
+                        num_params,
+                        flat_size_params,
+                        num_results,
+                    )
                 } else {
-                    let mut store = if R::may_gc() {
-                        AutoAssertNoGc::new(caller.store.0)
-                    } else {
-                        unsafe { AutoAssertNoGc::disabled(caller.store.0) }
-                    };
-                    // SAFETY: this function requires that `args` is safe for this
-                    // type signature, and the guarantees of `WasmRet` means that
-                    // everything should be typed appropriately.
-                    unsafe { ret.store(&mut store, args.as_mut())? };
+                    Self::array_call_trampoline_impl(
+                        caller,
+                        args,
+                        func,
+                        num_params,
+                        flat_size_params,
+                        num_results,
+                        flat_size_results,
+                    )
                 }
-                // Record the return values
-                rr::core_hooks::record_host_func_return(
-                    unsafe { &args.as_ref()[..num_results] },
-                    flat_size_results,
-                    caller.store.0,
-                )?;
-            } else {
-                rr::core_hooks::replay_validate_host_func_entry(
-                    unsafe { &args.as_ref()[..num_params] },
-                    flat_size_params,
-                    caller.store.0,
-                )?;
-
-                // Replay the return values
-                rr::core_hooks::replay_host_func_return(
-                    unsafe { &mut args.as_mut()[..num_results] },
-                    &mut caller,
-                )?;
             }
-
-            Ok(())
         };
 
         // With nothing else on the stack move `run` into this
@@ -2563,6 +2521,96 @@ impl HostContext {
                 Caller::with(store, instance, run)
             })
         }
+    }
+
+    unsafe fn array_call_trampoline_replay<T>(
+        mut caller: Caller<'_, T>,
+        mut args: NonNull<[MaybeUninit<ValRaw>]>,
+        num_params: usize,
+        flat_size_params: impl Iterator<Item = u8>,
+        num_results: usize,
+    ) -> Result<()>
+    where
+        T: 'static,
+    {
+        rr::core_hooks::replay_validate_host_func_entry(
+            unsafe { &args.as_ref()[..num_params] },
+            flat_size_params,
+            caller.store.0,
+        )?;
+        rr::core_hooks::replay_host_func_return(
+            unsafe { &mut args.as_mut()[..num_results] },
+            &mut caller,
+        )?;
+        Ok(())
+    }
+
+    unsafe fn array_call_trampoline_impl<T, F, P, R>(
+        mut caller: Caller<'_, T>,
+        mut args: NonNull<[MaybeUninit<ValRaw>]>,
+        func: &F,
+        num_params: usize,
+        flat_size_params: impl Iterator<Item = u8>,
+        num_results: usize,
+        flat_size_results: impl Iterator<Item = u8>,
+    ) -> Result<()>
+    where
+        F: Fn(Caller<'_, T>, P) -> R + 'static,
+        P: WasmTyList,
+        R: WasmRet,
+        T: 'static,
+    {
+        // Don't need auto-assert GC store here since we aren't using P, just raw args for recording
+        rr::core_hooks::record_validate_host_func_entry(
+            unsafe { &args.as_ref()[..num_params] },
+            flat_size_params,
+            caller.store.0,
+        )?;
+
+        let ret = 'ret: {
+            if let Err(trap) = caller.store.0.call_hook(CallHook::CallingHost) {
+                break 'ret R::fallible_from_error(trap);
+            }
+
+            let mut store = if P::may_gc() {
+                AutoAssertNoGc::new(caller.store.0)
+            } else {
+                unsafe { AutoAssertNoGc::disabled(caller.store.0) }
+            };
+            // SAFETY: this function requires `args` to be valid and the
+            // `WasmTyList` trait means that everything should be correctly
+            // ascribed/typed, making this valid to load from.
+            let params = unsafe { P::load(&mut store, args.as_mut()) };
+            let _ = &mut store;
+            drop(store);
+
+            let r = func(caller.sub_caller(), params);
+            if let Err(trap) = caller.store.0.call_hook(CallHook::ReturningFromHost) {
+                break 'ret R::fallible_from_error(trap);
+            }
+            r.into_fallible()
+        };
+
+        if !ret.compatible_with_store(caller.store.0) {
+            bail!("host function attempted to return cross-`Store` value to Wasm")
+        } else {
+            let mut store = if R::may_gc() {
+                AutoAssertNoGc::new(caller.store.0)
+            } else {
+                unsafe { AutoAssertNoGc::disabled(caller.store.0) }
+            };
+            // SAFETY: this function requires that `args` is safe for this
+            // type signature, and the guarantees of `WasmRet` means that
+            // everything should be typed appropriately.
+            unsafe { ret.store(&mut store, args.as_mut())? };
+        }
+        // Record the return values
+        rr::core_hooks::record_host_func_return(
+            unsafe { &args.as_ref()[..num_results] },
+            flat_size_results,
+            caller.store.0,
+        )?;
+        Ok(())
     }
 }
 

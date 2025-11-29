@@ -8,12 +8,11 @@ use crate::component::types::ComponentFunc;
 use crate::component::{ComponentNamedList, ComponentType, Instance, Lift, Lower, Val};
 use crate::prelude::*;
 use crate::rr;
-#[cfg(feature = "rr")]
-use crate::rr::component_hooks::ReplayLoweringPhase;
 use crate::runtime::vm::component::{
     ComponentInstance, VMComponentContext, VMLowering, VMLoweringCallee,
 };
 use crate::runtime::vm::{SendSyncPtr, VMOpaqueContext, VMStore};
+use crate::vm::component::InstanceFlags;
 use crate::{AsContextMut, CallHook, StoreContextMut, ValRaw};
 use alloc::sync::Arc;
 use core::any::Any;
@@ -23,7 +22,7 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use wasmtime_environ::component::{
     CanonicalAbiInfo, ComponentTypes, InterfaceType, MAX_FLAT_ASYNC_PARAMS, MAX_FLAT_PARAMS,
-    MAX_FLAT_RESULTS, OptionsIndex, TypeFuncIndex, TypeTuple,
+    MAX_FLAT_RESULTS, OptionsIndex, RuntimeComponentInstanceIndex, TypeFuncIndex, TypeTuple,
 };
 
 pub struct HostFunc {
@@ -755,12 +754,12 @@ where
     T: 'static,
 {
     let (component, store) = instance.component_and_store_mut(store.0);
-    let mut store = StoreContextMut(store);
+    let store = StoreContextMut(store);
     let vminstance = instance.id().get(store.0);
     let opts = &component.env_component().options[options];
     let async_ = opts.async_;
     let caller_instance = opts.instance;
-    let mut flags = vminstance.instance_flags(caller_instance);
+    let flags = vminstance.instance_flags(caller_instance);
 
     // Perform a dynamic check that this instance can indeed be left. Exiting
     // the component is disallowed, for example, when the `realloc` function
@@ -770,209 +769,259 @@ where
     }
 
     let types = component.types();
+
+    unsafe {
+        // This top-level switch determines whether or not we're in replay mode or
+        // not. In replay mode, we skip all lifting and execution of host functions and
+        // just replay lowering effects observed in the trace
+        if store.0.replay_enabled() {
+            call_host_dynamic_replay(store, instance, ty, types, options, storage, async_)
+        } else {
+            call_host_dynamic_impl(
+                store,
+                instance,
+                ty,
+                types,
+                options,
+                storage,
+                async_,
+                caller_instance,
+                flags,
+                closure,
+            )
+        }
+    }
+}
+
+unsafe fn call_host_dynamic_impl<T, F>(
+    mut store: StoreContextMut<'_, T>,
+    instance: Instance,
+    ty: TypeFuncIndex,
+    types: &Arc<ComponentTypes>,
+    options: OptionsIndex,
+    storage: &mut [MaybeUninit<ValRaw>],
+    async_: bool,
+    caller_instance: RuntimeComponentInstanceIndex,
+    mut flags: InstanceFlags,
+    closure: F,
+) -> Result<()>
+where
+    F: Fn(
+            StoreContextMut<'_, T>,
+            ComponentFunc,
+            Vec<Val>,
+            usize,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<Val>>> + Send + 'static>>
+        + Send
+        + Sync
+        + 'static,
+    T: 'static,
+{
     let func_ty = &types[ty];
     let param_tys = &types[func_ty.params];
     let result_tys = &types[func_ty.results];
 
+    let mut params_and_results = Vec::new();
+    let mut lift = &mut LiftContext::new(store.0.store_opaque_mut(), options, instance);
+    lift.enter_call();
     let max_flat = if async_ {
         MAX_FLAT_ASYNC_PARAMS
     } else {
         MAX_FLAT_PARAMS
     };
+    let ty = ComponentFunc::from(ty, &lift.instance_type());
 
-    // This top-level switch determines whether or not we're in replay mode or
-    // not. In replay mode, we skip all lifting and execution of host functions and
-    // just replay lowering effects observed in the trace
-    if !store.0.replay_enabled() {
-        let mut params_and_results = Vec::new();
-        let mut lift = &mut LiftContext::new(store.0.store_opaque_mut(), options, instance);
-        lift.enter_call();
-        let ty = ComponentFunc::from(ty, &lift.instance_type());
-
-        let ret_index = unsafe {
-            dynamic_params_load(
-                &mut lift,
-                types,
-                storage,
-                param_tys,
-                &mut params_and_results,
-                max_flat,
-            )?
-        };
-        let result_start = params_and_results.len();
-        for _ in 0..result_tys.types.len() {
-            params_and_results.push(Val::Bool(false));
-        }
-
-        rr::component_hooks::record_validate_host_func_entry(
-            storage,
+    let ret_index = unsafe {
+        dynamic_params_load(
+            &mut lift,
             types,
-            &InterfaceType::Tuple(func_ty.params),
-            store.0.store_opaque_mut(),
-        )?;
+            storage,
+            param_tys,
+            &mut params_and_results,
+            max_flat,
+        )?
+    };
+    let result_start = params_and_results.len();
+    for _ in 0..result_tys.types.len() {
+        params_and_results.push(Val::Bool(false));
+    }
 
-        if async_ {
-            #[cfg(feature = "component-model-async")]
-            {
-                let retptr = if result_tys.types.len() == 0 {
-                    0
-                } else {
-                    let retptr = unsafe { storage[ret_index].assume_init() };
-                    let mut lower = LowerContext::new(store.as_context_mut(), options, instance);
-                    validate_inbounds_dynamic(&result_tys.abi, lower.as_slice_mut(), &retptr)?
-                };
+    rr::component_hooks::record_validate_host_func_entry(
+        storage,
+        types,
+        &InterfaceType::Tuple(func_ty.params),
+        store.0.store_opaque_mut(),
+    )?;
 
-                let future = closure(store.as_context_mut(), ty, params_and_results, result_start);
-
-                let task =
-                    instance.first_poll(store.as_context_mut(), future, caller_instance, {
-                        let result_tys = func_ty.results;
-                        move |store: StoreContextMut<T>, result_vals: Vec<Val>| {
-                            unsafe {
-                                flags.set_may_leave(false);
-                            }
-
-                            let mut lower = LowerContext::new(store, options, instance);
-                            let result_tys = &lower.types[result_tys];
-                            let result_vals = &result_vals[result_start..];
-                            assert_eq!(result_vals.len(), result_tys.types.len());
-                            let mut ptr = retptr;
-                            for (val, ty) in result_vals.iter().zip(result_tys.types.iter()) {
-                                let offset =
-                                    lower.types.canonical_abi(ty).next_field32_size(&mut ptr);
-                                rr::component_hooks::record_lower_memory(
-                                    |cx, ty, ptr| val.store(cx, ty, ptr),
-                                    &mut lower,
-                                    *ty,
-                                    offset,
-                                )?;
-                            }
-
-                            unsafe {
-                                flags.set_may_leave(true);
-                            }
-
-                            lower.exit_call()?;
-
-                            Ok(())
-                        }
-                    })?;
-
-                let status = if let Some(task) = task {
-                    Status::Started.pack(Some(task))
-                } else {
-                    Status::Returned.pack(None)
-                };
-
-                storage[0] = MaybeUninit::new(ValRaw::i32(status as i32));
-                rr::component_hooks::record_host_func_return(
-                    &storage[..1],
-                    types,
-                    &InterfaceType::U32,
-                    store.0,
-                )?;
-            }
-            #[cfg(not(feature = "component-model-async"))]
-            {
-                unreachable!(
-                    "async-lowered imports should have failed validation \
-                 when `component-model-async` feature disabled"
-                );
-            }
-        } else {
-            let future = closure(store.as_context_mut(), ty, params_and_results, result_start);
-            let result_vals = concurrent::poll_and_block(store.0, future, caller_instance)?;
-            let result_vals = &result_vals[result_start..];
-
-            unsafe {
-                flags.set_may_leave(false);
-            }
-
-            let mut cx = LowerContext::new(store, options, instance);
-            if let Some(cnt) = result_tys.abi.flat_count(MAX_FLAT_RESULTS) {
-                let mut dst = storage[..cnt].iter_mut();
-                for (val, ty) in result_vals.iter().zip(result_tys.types.iter()) {
-                    rr::component_hooks::record_lower_flat(
-                        |cx, ty| val.lower(cx, ty, &mut dst),
-                        &mut cx,
-                        *ty,
-                    )?;
-                }
-                assert!(dst.next().is_none());
-                rr::component_hooks::record_host_func_return(
-                    storage,
-                    cx.types,
-                    &InterfaceType::Tuple(func_ty.results),
-                    cx.store.0,
-                )?;
+    if async_ {
+        #[cfg(feature = "component-model-async")]
+        {
+            let retptr = if result_tys.types.len() == 0 {
+                0
             } else {
-                let ret_ptr = unsafe { storage[ret_index].assume_init_ref() };
-                let mut ptr =
-                    validate_inbounds_dynamic(&result_tys.abi, cx.as_slice_mut(), ret_ptr)?;
-                for (val, ty) in result_vals.iter().zip(result_tys.types.iter()) {
-                    let offset = cx.types.canonical_abi(ty).next_field32_size(&mut ptr);
-                    rr::component_hooks::record_lower_memory(
-                        |cx, ty, ptr| val.store(cx, ty, ptr),
-                        &mut cx,
-                        *ty,
-                        offset,
-                    )?;
+                let retptr = unsafe { storage[ret_index].assume_init() };
+                let mut lower = LowerContext::new(store.as_context_mut(), options, instance);
+                validate_inbounds_dynamic(&result_tys.abi, lower.as_slice_mut(), &retptr)?
+            };
+
+            let future = closure(store.as_context_mut(), ty, params_and_results, result_start);
+
+            let task = instance.first_poll(store.as_context_mut(), future, caller_instance, {
+                let result_tys = func_ty.results;
+                move |store: StoreContextMut<T>, result_vals: Vec<Val>| {
+                    unsafe {
+                        flags.set_may_leave(false);
+                    }
+
+                    let mut lower = LowerContext::new(store, options, instance);
+                    let result_tys = &lower.types[result_tys];
+                    let result_vals = &result_vals[result_start..];
+                    assert_eq!(result_vals.len(), result_tys.types.len());
+                    let mut ptr = retptr;
+                    for (val, ty) in result_vals.iter().zip(result_tys.types.iter()) {
+                        let offset = lower.types.canonical_abi(ty).next_field32_size(&mut ptr);
+                        val.store(&mut lower, *ty, offset)?;
+                    }
+
+                    unsafe {
+                        flags.set_may_leave(true);
+                    }
+
+                    lower.exit_call()?;
+
+                    Ok(())
                 }
-                // Lower store into pointer
-                rr::component_hooks::record_host_func_return(
-                    &storage[ret_index..ret_index + 1],
-                    cx.types,
-                    &InterfaceType::U32,
-                    cx.store.0,
-                )?;
-            }
+            })?;
 
-            unsafe {
-                flags.set_may_leave(true);
-            }
+            let status = if let Some(task) = task {
+                Status::Started.pack(Some(task))
+            } else {
+                Status::Returned.pack(None)
+            };
 
-            cx.exit_call()?;
+            storage[0] = MaybeUninit::new(ValRaw::i32(status as i32));
+        }
+        #[cfg(not(feature = "component-model-async"))]
+        {
+            unreachable!(
+                "async-lowered imports should have failed validation \
+                 when `component-model-async` feature disabled"
+            );
         }
     } else {
+        let future = closure(store.as_context_mut(), ty, params_and_results, result_start);
+        let result_vals = concurrent::poll_and_block(store.0, future, caller_instance)?;
+        let result_vals = &result_vals[result_start..];
+
+        unsafe {
+            flags.set_may_leave(false);
+        }
+
+        let mut cx = LowerContext::new(store, options, instance);
+        if let Some(cnt) = result_tys.abi.flat_count(MAX_FLAT_RESULTS) {
+            let mut dst = storage[..cnt].iter_mut();
+            for (val, ty) in result_vals.iter().zip(result_tys.types.iter()) {
+                rr::component_hooks::record_lower_flat(
+                    |cx, ty| val.lower(cx, ty, &mut dst),
+                    &mut cx,
+                    *ty,
+                )?;
+            }
+            assert!(dst.next().is_none());
+            rr::component_hooks::record_host_func_return(
+                storage,
+                cx.types,
+                &InterfaceType::Tuple(func_ty.results),
+                cx.store.0,
+            )?;
+        } else {
+            let ret_ptr = unsafe { storage[ret_index].assume_init_ref() };
+            let mut ptr = validate_inbounds_dynamic(&result_tys.abi, cx.as_slice_mut(), ret_ptr)?;
+            for (val, ty) in result_vals.iter().zip(result_tys.types.iter()) {
+                let offset = cx.types.canonical_abi(ty).next_field32_size(&mut ptr);
+                rr::component_hooks::record_lower_memory(
+                    |cx, ty, ptr| val.store(cx, ty, ptr),
+                    &mut cx,
+                    *ty,
+                    offset,
+                )?;
+            }
+            // Lower store into pointer
+            rr::component_hooks::record_host_func_return(
+                &storage[ret_index..ret_index + 1],
+                cx.types,
+                &InterfaceType::U32,
+                cx.store.0,
+            )?;
+        }
+
+        unsafe {
+            flags.set_may_leave(true);
+        }
+
+        cx.exit_call()?;
+    }
+
+    Ok(())
+}
+
+unsafe fn call_host_dynamic_replay<T>(
+    store: StoreContextMut<'_, T>,
+    instance: Instance,
+    ty: TypeFuncIndex,
+    types: &Arc<ComponentTypes>,
+    options: OptionsIndex,
+    storage: &mut [MaybeUninit<ValRaw>],
+    async_: bool,
+) -> Result<()> {
+    #[cfg(feature = "rr")]
+    {
+        use crate::rr::component_hooks::ReplayLoweringPhase;
+        // Mirror of `dynamic_params_load` for replay. Keep in sync
+        fn dynamic_params_load_replay(param_tys: &TypeTuple, max_flat_params: usize) -> usize {
+            if let Some(param_count) = param_tys.abi.flat_count(max_flat_params) {
+                param_count
+            } else {
+                1
+            }
+        }
+
+        if async_ {
+            unreachable!(
+                "Replay logic should be unreachable with component async-ABI (currently unsupported)"
+            );
+        }
+        let func_ty = &types[ty];
+        let param_tys = &types[func_ty.params];
+        let result_tys = &types[func_ty.results];
+
         rr::component_hooks::replay_validate_host_func_entry(
             storage,
             types,
             &InterfaceType::Tuple(func_ty.params),
             store.0.store_opaque_mut(),
         )?;
-        // Replay host function path: Just lower the results from the trace
-        #[cfg(feature = "rr")]
-        {
-            let mut cx = LowerContext::new(store, options, instance);
-            // Skip lifting/lowering logic, and just replaying the lowering state
-            if async_ {
-                #[cfg(feature = "component-model-async")]
-                cx.replay_lowering(Some(&mut storage[..1]), ReplayLoweringPhase::HostFuncReturn)?;
-                #[cfg(not(feature = "component-model-async"))]
-                unreachable!(
-                    "async-lowered imports should have failed validation \
-                 when `component-model-async` feature disabled"
-                );
-            } else {
-                let ret_index = unsafe { dynamic_params_load_replay(param_tys, max_flat) };
-                // Copy the entire contiguous storage slice instead of looping
-                if let Some(_cnt) = result_tys.abi.flat_count(MAX_FLAT_RESULTS) {
-                    cx.replay_lowering(Some(storage), ReplayLoweringPhase::HostFuncReturn)?;
-                } else {
-                    cx.replay_lowering(
-                        Some(&mut storage[ret_index..ret_index + 1]),
-                        ReplayLoweringPhase::HostFuncReturn,
-                    )?;
-                }
-            }
-        }
-        #[cfg(not(feature = "rr"))]
-        {
-            unreachable!("cannot reach host function replay when rr is disabled");
-        }
-    }
 
-    Ok(())
+        let mut cx = LowerContext::new(store, options, instance);
+
+        // Skip lifting/lowering logic, and just replaying the lowering state
+        let ret_index = dynamic_params_load_replay(param_tys, MAX_FLAT_PARAMS);
+        // Copy the entire contiguous storage slice instead of looping
+        if let Some(_cnt) = result_tys.abi.flat_count(MAX_FLAT_RESULTS) {
+            cx.replay_lowering(Some(storage), ReplayLoweringPhase::HostFuncReturn)?;
+        } else {
+            cx.replay_lowering(
+                Some(&mut storage[ret_index..ret_index + 1]),
+                ReplayLoweringPhase::HostFuncReturn,
+            )?;
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "rr"))]
+    {
+        let _ = (store, instance, ty, types, options, storage, async_);
+        unreachable!("Host function replay logic should be unreached when `rr` is disabled");
+    }
 }
 
 /// Loads the parameters for a dynamic host function call into `params`
@@ -1012,16 +1061,6 @@ unsafe fn dynamic_params_load(
             params.push(Val::load(cx, *ty, memory)?);
         }
         Ok(1)
-    }
-}
-
-/// Replay of return values from `dynamic_params_load`. Keep in sync
-#[cfg(feature = "rr")]
-unsafe fn dynamic_params_load_replay(param_tys: &TypeTuple, max_flat_params: usize) -> usize {
-    if let Some(param_count) = param_tys.abi.flat_count(max_flat_params) {
-        param_count
-    } else {
-        1
     }
 }
 

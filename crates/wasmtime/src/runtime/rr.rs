@@ -4,6 +4,14 @@
 use crate::ValRaw;
 use ::core::mem::MaybeUninit;
 
+/// Component-async-ABI is not supported for record/replay yet; add a feature gate
+//const _: () = {
+//    #[cfg(all(feature = "rr", feature = "component-model-async"))]
+//    compile_error!(
+//        "The `component-model-async` feature is not supported with the `rr` feature yet"
+//    );
+//};
+
 /// Types that can be serialized/deserialized into/from
 /// flat types for record and replay
 #[allow(
