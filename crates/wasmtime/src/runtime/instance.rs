@@ -261,11 +261,13 @@ impl Instance {
             // function.
             unsafe { Instance::new_raw(store, limiter.as_mut(), module, imports).await? }
         };
+
+        store.0.validate_rr_config()?;
         if !from_component {
             #[cfg(feature = "rr")]
             {
                 // Components already record instantiation, so do not record their internal modules
-                rr_assert_unexported_memories(module)?;
+                rr_validate_module_unexported_memory(module)?;
                 store.0.record_event(|| InstantiationEvent {
                     module: *module.checksum(),
                     instance: instance.id(),
@@ -1007,9 +1009,10 @@ fn typecheck<I>(
     Ok(())
 }
 
-/// Check to flag exported memories in Core wasm modules when recording is enabled
+/// Ensure that memories are not exported memories in Core wasm modules when
+/// recording is enabled
 #[cfg(feature = "rr")]
-fn rr_assert_unexported_memories(module: &Module) -> Result<()> {
+fn rr_validate_module_unexported_memory(module: &Module) -> Result<()> {
     // Check for exported memories when recording is enabled.
     if module.engine().is_recording()
         && module.exports().any(|export| {

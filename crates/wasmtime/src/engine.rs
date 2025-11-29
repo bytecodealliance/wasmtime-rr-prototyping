@@ -97,7 +97,7 @@ impl Engine {
     /// the compiler setting `unwind_info` to `true`, but explicitly
     /// disable these two compiler settings will cause errors.
     pub fn new(config: &Config) -> Result<Engine> {
-        let config = config.clone();
+        let mut config = config.clone();
         let (mut tunables, features) = config.validate()?;
 
         #[cfg(feature = "runtime")]

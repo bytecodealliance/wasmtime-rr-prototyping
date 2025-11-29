@@ -20,7 +20,7 @@ cfg_if::cfg_if! {
 
     } else {
         // `no_std` configuration
-        use embedded_io::{Read, Write};
+        use embedded_io::{Read, Seek, Write};
 
         /// An [`Write`] usable for recording in RR
         ///

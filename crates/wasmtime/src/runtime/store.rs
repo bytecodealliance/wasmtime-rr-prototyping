@@ -2001,6 +2001,20 @@ impl StoreOpaque {
         }
     }
 
+    /// Ensures that the Store truly has a record sink/replay source when the
+    /// engine is setup for record/replay respectively.
+    pub(crate) fn validate_rr_config(&self) -> Result<()> {
+        #[cfg(feature = "rr")]
+        {
+            if self.engine().is_recording() && !self.record_buffer.is_some() {
+                bail!("Store must have a record buffer when the engine is setup for recording");
+            } else if self.engine().is_replaying() && !self.replay_buffer.is_some() {
+                bail!("Store must have a replay source when the engine is setup for replaying");
+            }
+        }
+        Ok(())
+    }
+
     #[inline(never)]
     async fn allocate_gc_store(
         &mut self,

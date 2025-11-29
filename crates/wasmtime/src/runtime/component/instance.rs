@@ -1194,6 +1194,7 @@ impl<T: 'static> InstancePre<T> {
             .increment_component_instance_count()?;
         let mut instantiator = Instantiator::new(&self.component, store.0, &self.imports);
 
+        store.0.validate_rr_config()?;
         #[cfg(feature = "rr")]
         store.0.record_event(|| InstantiationEvent {
             component: *self.component.checksum(),
