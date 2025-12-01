@@ -9,7 +9,8 @@ use crate::instance::OwnedImports;
 use crate::linker::DefinitionType;
 use crate::prelude::*;
 #[cfg(feature = "rr")]
-use crate::rr::{RecordBuffer, component_events::InstantiationEvent};
+use crate::rr::RecordBuffer;
+use crate::rr::component_hooks;
 use crate::runtime::vm::component::{
     CallContexts, ComponentInstance, ResourceTables, TypedResource, TypedResourceIndex,
 };
@@ -1080,7 +1081,6 @@ impl<'a> Instantiator<'a> {
 
     /// Convenience helper to return the instance ID of the `ComponentInstance` that's
     /// being instantiated
-    #[cfg(feature = "rr")]
     fn id(&self) -> ComponentInstanceId {
         self.id
     }
@@ -1194,12 +1194,13 @@ impl<T: 'static> InstancePre<T> {
             .increment_component_instance_count()?;
         let mut instantiator = Instantiator::new(&self.component, store.0, &self.imports);
 
+        // Record/replay hooks
         store.0.validate_rr_config()?;
-        #[cfg(feature = "rr")]
-        store.0.record_event(|| InstantiationEvent {
-            component: *self.component.checksum(),
-            instance: instantiator.id(),
-        })?;
+        component_hooks::record_and_replay_validate_instantiation(
+            &mut store,
+            *self.component.checksum(),
+            instantiator.id(),
+        )?;
 
         instantiator.run(&mut store).await.map_err(|e| {
             store

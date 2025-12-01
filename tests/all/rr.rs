@@ -1407,6 +1407,111 @@ fn test_component_option() -> Result<()> {
 }
 
 #[cfg(feature = "component-model")]
+#[test]
+fn test_component_builtins() -> Result<()> {
+    run_component_test(
+        r#"
+            (component
+                (type $r (resource (rep i32)))
+                (core func $rep (canon resource.rep $r))
+                (core func $new (canon resource.new $r))
+                (core func $drop (canon resource.drop $r))
+
+                (import "host-double" (func $host_double (param "v" s32) (result s32)))
+                (core func $host_double_core (canon lower (func $host_double)))
+
+                (core module $m
+                    (import "" "rep" (func $rep (param i32) (result i32)))
+                    (import "" "new" (func $new (param i32) (result i32)))
+                    (import "" "drop" (func $drop (param i32)))
+                    (import "" "host_double" (func $host_double (param i32) (result i32)))
+
+                    (func $start
+                        (local $r1 i32)
+                        (local $r2 i32)
+
+                        ;; resources assigned sequentially
+                        (local.set $r1 (call $new (i32.const 100)))
+                        (if (i32.ne (local.get $r1) (i32.const 1)) (then (unreachable)))
+
+                        (local.set $r2 (call $new (i32.const 200)))
+                        (if (i32.ne (local.get $r2) (i32.const 2)) (then (unreachable)))
+
+                        ;; representations all look good
+                        (if (i32.ne (call $rep (local.get $r1)) (i32.const 100)) (then (unreachable)))
+                        (if (i32.ne (call $rep (local.get $r2)) (i32.const 200)) (then (unreachable)))
+
+                        ;; reallocate r2
+                        (call $drop (local.get $r2))
+                        (local.set $r2 (call $new (i32.const 400)))
+
+                        ;; should have reused index 1
+                        (if (i32.ne (local.get $r2) (i32.const 2)) (then (unreachable)))
+
+                        ;; representations all look good
+                        (if (i32.ne (call $rep (local.get $r1)) (i32.const 100)) (then (unreachable)))
+                        (if (i32.ne (call $rep (local.get $r2)) (i32.const 400)) (then (unreachable)))
+
+                        ;; deallocate everything
+                        (call $drop (local.get $r1))
+                        (call $drop (local.get $r2))
+                    )
+                    (start $start)
+
+                    (func $run (result i32)
+                        (local $r1 i32)
+                        (local $val i32)
+
+                        ;; Create a new resource
+                        (local.set $r1 (call $new (i32.const 500)))
+                        
+                        ;; Get its representation
+                        (local.set $val (call $rep (local.get $r1)))
+                        
+                        ;; Double it using host function
+                        (local.set $val (call $host_double (local.get $val)))
+                        
+                        ;; Drop the resource
+                        (call $drop (local.get $r1))
+                        
+                        local.get $val
+                    )
+                    (export "run" (func $run))
+                )
+                (core instance $i (instantiate $m
+                    (with "" (instance
+                        (export "rep" (func $rep))
+                        (export "new" (func $new))
+                        (export "drop" (func $drop))
+                        (export "host_double" (func $host_double_core))
+                    ))
+                ))
+                (func $run_comp (result s32) (canon lift (core func $i "run")))
+                (export "run" (func $run_comp))
+            )
+        "#,
+        |linker| {
+            linker
+                .root()
+                .func_wrap("host-double", |_, (v,): (i32,)| Ok((v * 2,)))?;
+            Ok(())
+        },
+        |store, instance, is_async| {
+            Box::pin(async move {
+                let run = instance.get_typed_func::<(), (i32,)>(&mut *store, "run")?;
+                let (result,) = if is_async {
+                    run.call_async(&mut *store, ()).await?
+                } else {
+                    run.call(&mut *store, ())?
+                };
+                assert_eq!(result, 1000);
+                Ok(())
+            })
+        },
+    )
+}
+
+#[cfg(feature = "component-model")]
 fn cabi_realloc_wat() -> String {
     r#"
     (global $bump (mut i32) (i32.const 256))

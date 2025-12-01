@@ -1,14 +1,18 @@
+#[cfg(feature = "rr")]
+use super::{replay_data_from_store, replay_data_from_store_mut};
 use crate::rr::FlatBytes;
 #[cfg(feature = "rr")]
 use crate::rr::{
-    RREvent, RRFuncArgVals, ReplayError, ReplayHostContext, Replayer, ResultEvent,
+    RREvent, RRFuncArgVals, ReplayError, Replayer, ResultEvent, Validate,
     common_events::HostFuncEntryEvent, common_events::HostFuncReturnEvent,
-    common_events::WasmFuncReturnEvent, core_events::WasmFuncEntryEvent,
+    common_events::WasmFuncReturnEvent, core_events::InstantiationEvent,
+    core_events::WasmFuncEntryEvent,
 };
-use crate::store::StoreOpaque;
-use crate::{Caller, FuncType, StoreContextMut, ValRaw, WasmFuncOrigin, prelude::*};
+use crate::store::{InstanceId, StoreOpaque};
+use crate::{Caller, FuncType, Module, StoreContextMut, ValRaw, WasmFuncOrigin, prelude::*};
 #[cfg(feature = "rr")]
 use wasmtime_environ::EntityIndex;
+use wasmtime_environ::WasmChecksum;
 
 /// Record and replay hook operation for core wasm function entry events
 ///
@@ -121,7 +125,7 @@ where
     Ok(())
 }
 
-/// Replay hook operation for host function return events
+/// Replay hook operation for host function return events.
 #[inline]
 pub fn replay_host_func_return<T, U: 'static>(
     args: &mut [T],
@@ -146,14 +150,9 @@ where
                 RREvent::CoreWasmFuncEntry(event) => {
                     let entity = EntityIndex::from(event.origin.index);
 
-                    // SAFETY: The store's data is always of type `ReplayHostContext<T>` when created by
-                    // the replay driver. As an additional guarantee, we assert that replay is indeed
-                    // truly enabled.
-                    assert!(caller.store.0.replay_enabled());
-                    let replay_data = unsafe {
-                        let raw_ptr: *const U = caller.store.data();
-                        &*(raw_ptr as *const ReplayHostContext)
-                    };
+                    // Unwrapping the `replay_buffer_mut()` above ensures that we are in replay mode
+                    // passing the safety contract for `replay_data_from_store`
+                    let replay_data = unsafe { replay_data_from_store(&caller.store) };
 
                     // Grab the correct module instance
                     let instance = replay_data.get_module_instance(event.origin.instance)?;
@@ -192,5 +191,50 @@ where
         }
     }
     let _ = (args, caller);
+    Ok(())
+}
+
+/// Hook for recording a module instantiation event and validating the
+/// instantiation during replay.
+pub fn record_and_replay_validate_instantiation<T: 'static>(
+    store: &mut StoreContextMut<'_, T>,
+    module: WasmChecksum,
+    instance: InstanceId,
+) -> Result<()> {
+    #[cfg(feature = "rr")]
+    {
+        store
+            .0
+            .record_event(|| InstantiationEvent { module, instance })?;
+        if store.0.replay_enabled() {
+            let replay_data = unsafe { replay_data_from_store_mut(store) };
+            replay_data.take_current_module_instantiation().expect(
+                "replay driver should have set module instantiate data before trying to validate it",
+            ).validate(&InstantiationEvent { module, instance })?;
+        }
+    }
+    let _ = (store, module, instance);
+    Ok(())
+}
+
+/// Ensure that memories are not exported memories in Core wasm modules when
+/// recording is enabled.
+pub fn rr_validate_module_unexported_memory(module: &Module) -> Result<()> {
+    // Check for exported memories when recording is enabled.
+    #[cfg(feature = "rr")]
+    {
+        if module.engine().is_recording()
+            && module.exports().any(|export| {
+                if let crate::ExternType::Memory(_) = export.ty() {
+                    true
+                } else {
+                    false
+                }
+            })
+        {
+            bail!("Cannot support recording for core wasm modules when a memory is exported");
+        }
+    }
+    let _ = module;
     Ok(())
 }

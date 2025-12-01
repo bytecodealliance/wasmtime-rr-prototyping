@@ -1,21 +1,23 @@
+#[cfg(feature = "rr")]
+use super::replay_data_from_store_mut;
 use crate::ValRaw;
 use crate::component::{ComponentInstanceId, func::LowerContext};
 #[cfg(feature = "rr")]
-use crate::rr::common_events::{HostFuncEntryEvent, WasmFuncReturnEvent};
+use crate::rr::common_events::{HostFuncEntryEvent, HostFuncReturnEvent, WasmFuncReturnEvent};
 #[cfg(feature = "rr")]
 use crate::rr::component_events::{
-    LowerFlatEntryEvent, LowerFlatReturnEvent, LowerMemoryEntryEvent, LowerMemoryReturnEvent,
-    MemorySliceWriteEvent, PostReturnEvent, WasmFuncBeginEvent, WasmFuncEntryEvent,
+    InstantiationEvent, LowerFlatEntryEvent, LowerFlatReturnEvent, LowerMemoryEntryEvent,
+    LowerMemoryReturnEvent, MemorySliceWriteEvent, PostReturnEvent, WasmFuncBeginEvent,
+    WasmFuncEntryEvent,
 };
 #[cfg(feature = "rr")]
-use crate::rr::{
-    RRFuncArgVals, RecordBuffer, Recorder, ResultEvent, common_events::HostFuncReturnEvent,
-};
+use crate::rr::{RRFuncArgVals, RecordBuffer, Recorder, ResultEvent, Validate};
 use crate::store::StoreOpaque;
 use crate::{StoreContextMut, prelude::*};
 use alloc::sync::Arc;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
+use wasmtime_environ::WasmChecksum;
 use wasmtime_environ::component::{ComponentTypes, ExportIndex, InterfaceType, TypeFuncIndex};
 #[cfg(all(feature = "rr"))]
 use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
@@ -204,6 +206,31 @@ where
         .0
         .record_event(|| LowerFlatReturnEvent(ResultEvent::from_anyhow_result(&lower_result)))?;
     lower_result
+}
+
+/// Hook for recording a component instantiation event and validating the
+/// instantiation during replay.
+#[inline]
+pub fn record_and_replay_validate_instantiation<T>(
+    store: &mut StoreContextMut<'_, T>,
+    component: WasmChecksum,
+    instance: ComponentInstanceId,
+) -> Result<()> {
+    #[cfg(feature = "rr")]
+    {
+        store.0.record_event(|| InstantiationEvent {
+            component,
+            instance,
+        })?;
+        if store.0.replay_enabled() {
+            let replay_data = unsafe { replay_data_from_store_mut(store) };
+            replay_data.take_current_component_instantiation().expect(
+                "replay driver should have set component instantiate data before trying to validate it",
+            ).validate(&InstantiationEvent { component, instance })?;
+        }
+    }
+    let _ = (store, component, instance);
+    Ok(())
 }
 
 #[cfg(feature = "rr")]

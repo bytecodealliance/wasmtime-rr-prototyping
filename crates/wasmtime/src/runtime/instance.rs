@@ -1,7 +1,6 @@
 use crate::linker::{Definition, DefinitionType};
 use crate::prelude::*;
-#[cfg(feature = "rr")]
-use crate::rr::core_events::InstantiationEvent;
+use crate::rr::core_hooks;
 use crate::runtime::vm::{
     self, Imports, ModuleRuntimeInfo, VMFuncRef, VMFunctionImport, VMGlobalImport, VMMemoryImport,
     VMStore, VMTableImport, VMTagImport,
@@ -262,18 +261,18 @@ impl Instance {
             unsafe { Instance::new_raw(store, limiter.as_mut(), module, imports).await? }
         };
 
+        // Record/replay hooks
         store.0.validate_rr_config()?;
         if !from_component {
-            #[cfg(feature = "rr")]
-            {
-                // Components already record instantiation, so do not record their internal modules
-                rr_validate_module_unexported_memory(module)?;
-                store.0.record_event(|| InstantiationEvent {
-                    module: *module.checksum(),
-                    instance: instance.id(),
-                })?;
-            }
+            // Components already record instantiation, so do not record their internal modules
+            core_hooks::rr_validate_module_unexported_memory(&module)?;
+            core_hooks::record_and_replay_validate_instantiation(
+                store,
+                *module.checksum(),
+                instance.id(),
+            )?;
         }
+
         if let Some(start) = start {
             if store.0.async_support() {
                 #[cfg(feature = "async")]
@@ -1005,25 +1004,6 @@ fn typecheck<I>(
         debug_assert!(expected_ty.is_canonicalized_for_runtime_usage());
         check(&cx, &expected_ty, actual)
             .with_context(|| format!("incompatible import type for `{name}::{field}`"))?;
-    }
-    Ok(())
-}
-
-/// Ensure that memories are not exported memories in Core wasm modules when
-/// recording is enabled
-#[cfg(feature = "rr")]
-fn rr_validate_module_unexported_memory(module: &Module) -> Result<()> {
-    // Check for exported memories when recording is enabled.
-    if module.engine().is_recording()
-        && module.exports().any(|export| {
-            if let crate::ExternType::Memory(_) = export.ty() {
-                true
-            } else {
-                false
-            }
-        })
-    {
-        bail!("Cannot support recording for core wasm modules when a memory is exported");
     }
     Ok(())
 }

@@ -576,14 +576,20 @@ mod tests {
     use wasmtime_environ::FuncIndex;
 
     impl ReplayBuffer {
+        /// Pop the next replay event and calls `f` with a expected event type
+        ///
+        /// ## Errors
+        ///
+        /// See [`next_event_typed`](Replayer::next_event_typed)
+        #[inline]
         fn next_event_and<T, F>(&mut self, f: F) -> Result<(), ReplayError>
         where
             T: TryFrom<RREvent>,
             ReplayError: From<<T as TryFrom<RREvent>>::Error>,
             F: FnOnce(T) -> Result<(), ReplayError>,
         {
-            let event = self.next_event_typed::<T>()?;
-            f(event)
+            let call_event = self.next_event_typed()?;
+            Ok(f(call_event)?)
         }
     }
 
