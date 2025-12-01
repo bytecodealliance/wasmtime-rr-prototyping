@@ -29,15 +29,15 @@ use crate::prelude::*;
 use std::{any::Any, borrow::Cow, collections::BTreeMap, mem, ops::Range};
 
 use call_graph::CallGraph;
-#[cfg(feature = "component-model")]
-use wasmtime_environ::component::Translator;
 use wasmtime_environ::{
     Abi, BuiltinFunctionIndex, CompiledFunctionBody, CompiledFunctionsTable,
     CompiledFunctionsTableBuilder, CompiledModuleInfo, Compiler, DefinedFuncIndex, FilePos,
     FinishedObject, FuncKey, FunctionBodyData, InliningCompiler, IntraModuleInlining,
     ModuleEnvironment, ModuleTranslation, ModuleTypes, ModuleTypesBuilder, ObjectKind, PrimaryMap,
-    StaticModuleIndex, Tunables, WasmChecksum,
+    StaticModuleIndex, Tunables,
 };
+#[cfg(feature = "component-model")]
+use wasmtime_environ::{WasmChecksum, component::Translator};
 
 mod call_graph;
 mod scc;
