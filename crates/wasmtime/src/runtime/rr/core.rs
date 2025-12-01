@@ -6,7 +6,7 @@ pub use events::{
     RRFuncArgVals, ResultEvent, Validate, common_events, component_events, core_events,
     marker_events,
 };
-pub use io::{IOError, RecordWriter, ReplayReader};
+pub use io::{RecordWriter, ReplayReader};
 use serde::{Deserialize, Serialize};
 use wasmtime_environ::{EntityIndex, WasmChecksum};
 
@@ -189,7 +189,7 @@ pub enum ReplayError {
     FailedValidation,
     IncorrectEventVariant,
     InvalidEventPosition,
-    FailedRead(IOError),
+    FailedRead(anyhow::Error),
     EventError(Box<dyn EventError>),
     MissingComponent(WasmChecksum),
     MissingModule(WasmChecksum),

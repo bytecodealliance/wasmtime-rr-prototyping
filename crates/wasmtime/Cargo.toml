@@ -63,7 +63,6 @@ hashbrown = { workspace = true, features = ["default-hasher"] }
 bitflags = { workspace = true }
 futures = { workspace = true, features = ["alloc"], optional = true }
 bytes = { workspace = true, optional = true }
-embedded-io = { version = "0.6.1", features = ["alloc"], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-sys]
 workspace = true
@@ -428,4 +427,4 @@ debug = [
 compile-time-builtins = ['dep:wasm-compose', 'dep:tempfile']
 
 # Enable support for the common base infrastructure of record/replay
-rr = ["component-model", "dep:embedded-io"]
+rr = ["component-model"]
