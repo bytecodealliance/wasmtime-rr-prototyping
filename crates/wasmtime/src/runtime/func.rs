@@ -1354,9 +1354,8 @@ impl Func {
         let nparams = ty.params().len();
         val_vec.reserve(nparams + ty.results().len());
 
-        let flat_params = ty.params().map(|x| x.to_wasm_type().byte_size());
-
-        if !caller.store.0.replay_enabled() {
+        let mut run_impl = |caller: &mut Caller<'_, T>, values_vec: &mut [ValRaw]| -> Result<()> {
+            let flat_params = ty.params().map(|x| x.to_wasm_type().byte_size());
             rr::core_hooks::record_validate_host_func_entry(
                 values_vec,
                 flat_params,
@@ -1382,13 +1381,26 @@ impl Func {
 
             let flat_results = ty.results().map(|x| x.to_wasm_type().byte_size());
             rr::core_hooks::record_host_func_return(values_vec, flat_results, &mut caller.store.0)?;
-        } else {
+            Ok(())
+        };
+
+        let replay_impl = |caller: &mut Caller<'_, T>, values_vec: &mut [ValRaw]| -> Result<()> {
+            let flat_params = ty.params().map(|x| x.to_wasm_type().byte_size());
             rr::core_hooks::replay_validate_host_func_entry(
                 values_vec,
                 flat_params,
                 &mut caller.store.0,
             )?;
-            rr::core_hooks::replay_host_func_return(values_vec, &mut caller)?;
+            rr::core_hooks::replay_host_func_return(values_vec, caller)?;
+            Ok(())
+        };
+
+        if caller.store.0.replay_enabled() {
+            // In replay mode, we skip execution of host functions and
+            // just replay the return value effects observed in the trace
+            replay_impl(&mut caller, values_vec)?;
+        } else {
+            run_impl(&mut caller, values_vec)?;
         }
 
         // Restore our `val_vec` back into the store so it's usable for the next
