@@ -434,7 +434,7 @@ impl Recorder for RecordBuffer {
     fn flush(&mut self) -> Result<()> {
         log::debug!("Flushing record buffer...");
         for e in self.buf.drain(..) {
-            io::to_record_writer(&e, &mut self.writer)?;
+            io::to_record_writer(&e, &mut *self.writer)?;
         }
         return Ok(());
     }
@@ -467,7 +467,7 @@ impl Iterator for ReplayBuffer {
             return None;
         }
         let ret = 'event_loop: loop {
-            let result = io::from_replay_reader(&mut self.reader, &mut self.deser_buffer);
+            let result = io::from_replay_reader(&mut *self.reader, &mut self.deser_buffer);
             match result {
                 Err(e) => {
                     break 'event_loop Some(Err(ReplayError::FailedRead(e)));

@@ -5022,6 +5022,11 @@ pub(crate) fn queue_call<T: 'static, R: Send + 'static>(
     mut store: StoreContextMut<T>,
     prepared: PreparedCall<R>,
 ) -> Result<impl Future<Output = Result<(R, oneshot::Receiver<()>)>> + Send + 'static + use<T, R>> {
+    #[cfg(feature = "rr")]
+    assert!(
+        !(store.engine().is_recording() || store.engine().is_replaying()),
+        "component model async ABI not supported during recording or replaying"
+    );
     let PreparedCall {
         handle,
         thread,
