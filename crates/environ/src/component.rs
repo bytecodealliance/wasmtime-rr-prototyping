@@ -17,6 +17,7 @@
 //!
 //! Note that this entire module is gated behind the `component-model` Cargo
 //! feature.
+use serde::{Deserialize, Serialize};
 
 /// Canonical ABI-defined constant for the maximum number of "flat" parameters
 /// to a wasm function, or the maximum number of parameters a core wasm function
@@ -272,3 +273,7 @@ declare_builtin_index! {
     /// An index type for component builtin functions.
     pub struct ComponentBuiltinFunctionIndex: foreach_builtin_component_function;
 }
+
+/// Return value from `resource.drop` builtin.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ResourceDropRet(pub Option<u32>);

@@ -1,10 +1,7 @@
-use super::ReplayError;
-use crate::rr::FlatBytes;
-use crate::{AsContextMut, Val, prelude::*};
-use crate::{ValRaw, ValType};
+use crate::ReplayError;
+use anyhow::Result;
 use core::fmt;
 use serde::{Deserialize, Serialize};
-use wasmtime_environ::component::FlatTypesStorage;
 
 /// A serde compatible representation of errors produced during execution
 /// of certain events
@@ -26,12 +23,12 @@ pub trait EventError: core::error::Error + Send + Sync + 'static {
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct RRFuncArgVals {
     /// Flat data vector of bytes
-    bytes: Vec<u8>,
+    pub bytes: Vec<u8>,
     /// Descriptor vector of sizes of each flat types
     ///
     /// The length of this vector equals the number of flat types,
     /// and the sum of this vector equals the length of `bytes`
-    sizes: Vec<u8>,
+    pub sizes: Vec<u8>,
 }
 
 impl fmt::Debug for RRFuncArgVals {
@@ -55,60 +52,6 @@ impl fmt::Debug for RRFuncArgVals {
             pos += *flat_size as usize;
         }
         list.finish()
-    }
-}
-
-impl RRFuncArgVals {
-    /// Construct [`RRFuncArgVals`] from raw value buffer and a flat size iterator
-    #[inline]
-    pub fn from_flat_iter<T>(args: &[T], flat: impl Iterator<Item = u8>) -> RRFuncArgVals
-    where
-        T: FlatBytes,
-    {
-        let mut bytes = Vec::new();
-        let mut sizes = Vec::new();
-        for (flat_size, arg) in flat.zip(args.iter()) {
-            bytes.extend_from_slice(unsafe { &arg.bytes(flat_size) });
-            sizes.push(flat_size);
-        }
-        RRFuncArgVals { bytes, sizes }
-    }
-
-    /// Construct [`RRFuncArgVals`] from raw value buffer and a [`FlatTypesStorage`]
-    #[inline]
-    pub fn from_flat_storage<T>(args: &[T], flat: FlatTypesStorage) -> RRFuncArgVals
-    where
-        T: FlatBytes,
-    {
-        RRFuncArgVals::from_flat_iter(args, flat.iter32())
-    }
-
-    /// Encode [`RRFuncArgVals`] back into raw value buffer
-    #[inline]
-    pub fn into_raw_slice<T>(self, raw_args: &mut [T])
-    where
-        T: FlatBytes,
-    {
-        let mut pos = 0;
-        for (flat_size, dst) in self.sizes.into_iter().zip(raw_args.iter_mut()) {
-            *dst = T::from_bytes(&self.bytes[pos..pos + flat_size as usize]);
-            pos += flat_size as usize;
-        }
-    }
-
-    /// Generate a vector of [`crate::Val`] from [`RRFuncArgVals`] and [`ValType`]s
-    #[inline]
-    pub fn to_val_vec(self, mut store: impl AsContextMut, val_types: Vec<ValType>) -> Vec<Val> {
-        let mut pos = 0;
-        let mut vals = Vec::new();
-        for (flat_size, val_type) in self.sizes.into_iter().zip(val_types.into_iter()) {
-            let raw = ValRaw::from_bytes(&self.bytes[pos..pos + flat_size as usize]);
-            // SAFETY: The safety contract here is the same as that of [`Val::from_raw`].
-            // The caller must ensure that raw has the type provided.
-            vals.push(unsafe { Val::from_raw(&mut store, raw, val_type) });
-            pos += flat_size as usize;
-        }
-        vals
     }
 }
 
@@ -234,7 +177,6 @@ macro_rules! event_error_types {
 /// Marker events should be injectable at any point in a record
 /// trace without impacting functional correctness of replay
 pub mod marker_events {
-    use crate::prelude::*;
     use serde::{Deserialize, Serialize};
 
     /// A Nop event

@@ -3,15 +3,15 @@ use super::replay_data_from_store_mut;
 use crate::ValRaw;
 use crate::component::{ComponentInstanceId, func::LowerContext};
 #[cfg(feature = "rr")]
-use crate::rr::common_events::{HostFuncEntryEvent, HostFuncReturnEvent, WasmFuncReturnEvent};
-#[cfg(feature = "rr")]
-use crate::rr::component_events::{
-    InstantiationEvent, LowerFlatEntryEvent, LowerFlatReturnEvent, LowerMemoryEntryEvent,
-    LowerMemoryReturnEvent, MemorySliceWriteEvent, PostReturnEvent, WasmFuncBeginEvent,
-    WasmFuncEntryEvent,
+use crate::rr::{
+    RRFuncArgVals, RRFuncArgValsConvertable, RecordBuffer, Recorder, ResultEvent, Validate,
+    common_events::{HostFuncEntryEvent, HostFuncReturnEvent, WasmFuncReturnEvent},
+    component_events::{
+        InstantiationEvent, LowerFlatEntryEvent, LowerFlatReturnEvent, LowerMemoryEntryEvent,
+        LowerMemoryReturnEvent, MemorySliceWriteEvent, PostReturnEvent, WasmFuncBeginEvent,
+        WasmFuncEntryEvent,
+    },
 };
-#[cfg(feature = "rr")]
-use crate::rr::{RRFuncArgVals, RecordBuffer, Recorder, ResultEvent, Validate};
 use crate::store::StoreOpaque;
 use crate::{StoreContextMut, prelude::*};
 use alloc::sync::Arc;
@@ -19,7 +19,7 @@ use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use wasmtime_environ::WasmChecksum;
 use wasmtime_environ::component::{ComponentTypes, ExportIndex, InterfaceType, TypeFuncIndex};
-#[cfg(all(feature = "rr"))]
+#[cfg(feature = "rr")]
 use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
 
 /// Indicator type signalling the context during lowering
@@ -37,12 +37,15 @@ pub enum ReplayLoweringPhase {
 #[inline]
 pub fn record_wasm_func_begin(
     instance: ComponentInstanceId,
-    func_idx: ExportIndex,
+    func_index: ExportIndex,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr")]
-    store.record_event(|| WasmFuncBeginEvent { instance, func_idx })?;
-    let _ = (instance, func_idx, store);
+    store.record_event(|| WasmFuncBeginEvent {
+        instance: instance.into(),
+        func_index: func_index.into(),
+    })?;
+    let _ = (instance, func_index, store);
     Ok(())
 }
 
@@ -50,14 +53,15 @@ pub fn record_wasm_func_begin(
 #[inline]
 pub fn record_wasm_func_post_return<T>(
     instance: ComponentInstanceId,
-    func_idx: ExportIndex,
+    func_index: ExportIndex,
     store: &mut StoreContextMut<'_, T>,
 ) -> Result<()> {
     #[cfg(feature = "rr")]
-    store
-        .0
-        .record_event(|| PostReturnEvent { instance, func_idx })?;
-    let _ = (instance, func_idx, store);
+    store.0.record_event(|| PostReturnEvent {
+        instance: instance.into(),
+        func_index: func_index.into(),
+    })?;
+    let _ = (instance, func_index, store);
     Ok(())
 }
 
@@ -220,13 +224,13 @@ pub fn record_and_replay_validate_instantiation<T>(
     {
         store.0.record_event(|| InstantiationEvent {
             component,
-            instance,
+            instance: instance.into(),
         })?;
         if store.0.replay_enabled() {
             let replay_data = unsafe { replay_data_from_store_mut(store) };
             replay_data.take_current_component_instantiation().expect(
                 "replay driver should have set component instantiate data before trying to validate it",
-            ).validate(&InstantiationEvent { component, instance })?;
+            ).validate(&InstantiationEvent { component, instance: instance.into() })?;
         }
     }
     let _ = (store, component, instance);

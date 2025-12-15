@@ -3,10 +3,9 @@ use super::{replay_data_from_store, replay_data_from_store_mut};
 use crate::rr::FlatBytes;
 #[cfg(feature = "rr")]
 use crate::rr::{
-    RREvent, RRFuncArgVals, ReplayError, Replayer, ResultEvent, Validate,
-    common_events::HostFuncEntryEvent, common_events::HostFuncReturnEvent,
-    common_events::WasmFuncReturnEvent, core_events::InstantiationEvent,
-    core_events::WasmFuncEntryEvent,
+    RREvent, RRFuncArgVals, RRFuncArgValsConvertable, ReplayError, Replayer, ResultEvent, Validate,
+    common_events::{HostFuncEntryEvent, HostFuncReturnEvent, WasmFuncReturnEvent},
+    core_events::{InstantiationEvent, WasmFuncEntryEvent},
 };
 use crate::store::{InstanceId, StoreOpaque};
 use crate::{Caller, FuncType, Module, StoreContextMut, ValRaw, WasmFuncOrigin, prelude::*};
@@ -35,7 +34,8 @@ where
             store.0.record_event(|| {
                 let flat = ty.params().map(|t| t.to_wasm_type().byte_size());
                 WasmFuncEntryEvent {
-                    origin,
+                    instance: origin.instance.into(),
+                    func_index: origin.index.into(),
                     args: RRFuncArgVals::from_flat_iter(args, flat),
                 }
             })?;
@@ -148,14 +148,14 @@ where
                 }
                 // Re-entrant call into wasm function: this resembles the implementation in [`ReplayInstance`]
                 RREvent::CoreWasmFuncEntry(event) => {
-                    let entity = EntityIndex::from(event.origin.index);
+                    let entity = Into::<EntityIndex>::into(event.func_index);
 
                     // Unwrapping the `replay_buffer_mut()` above ensures that we are in replay mode
                     // passing the safety contract for `replay_data_from_store`
                     let replay_data = unsafe { replay_data_from_store(&caller.store) };
 
                     // Grab the correct module instance
-                    let instance = replay_data.get_module_instance(event.origin.instance)?;
+                    let instance = replay_data.get_module_instance(event.instance)?;
 
                     let mut store = &mut caller.store;
                     let func = instance
@@ -203,14 +203,15 @@ pub fn record_and_replay_validate_instantiation<T: 'static>(
 ) -> Result<()> {
     #[cfg(feature = "rr")]
     {
-        store
-            .0
-            .record_event(|| InstantiationEvent { module, instance })?;
+        store.0.record_event(|| InstantiationEvent {
+            module,
+            instance: instance.into(),
+        })?;
         if store.0.replay_enabled() {
             let replay_data = unsafe { replay_data_from_store_mut(store) };
             replay_data.take_current_module_instantiation().expect(
                 "replay driver should have set module instantiate data before trying to validate it",
-            ).validate(&InstantiationEvent { module, instance })?;
+            ).validate(&InstantiationEvent { module, instance: instance.into() })?;
         }
     }
     let _ = (store, module, instance);

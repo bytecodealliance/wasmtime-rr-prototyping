@@ -1,14 +1,15 @@
+//! This module does NOT run tests with `call_async` if `component-model-async`
+//! feature is disabled since async ABI is not supported for RR builds yet.
+
 use anyhow::Result;
 use std::future::Future;
 use std::io::Cursor;
 use std::pin::Pin;
+use wasmtime::component::{Component, HasSelf, Linker as ComponentLinker, bindgen};
 use wasmtime::{
     Config, Engine, Linker, Module, OptLevel, RRConfig, RecordSettings, ReplayEnvironment,
     ReplaySettings, Store,
 };
-
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
-use wasmtime::component::{Component, HasSelf, Linker as ComponentLinker, bindgen};
 
 struct TestState;
 
@@ -28,8 +29,13 @@ fn create_recording_engine(is_async: bool) -> Result<Engine> {
         .debug_info(true)
         .cranelift_opt_level(OptLevel::None)
         .rr(RRConfig::Recording);
+    #[cfg(feature = "component-model-async")]
     if is_async {
         config.async_support(true);
+    }
+    #[cfg(not(feature = "component-model-async"))]
+    {
+        let _ = is_async;
     }
     Engine::new(&config)
 }
@@ -40,8 +46,13 @@ fn create_replay_engine(is_async: bool) -> Result<Engine> {
         .debug_info(true)
         .cranelift_opt_level(OptLevel::None)
         .rr(RRConfig::Replaying);
+    #[cfg(feature = "component-model-async")]
     if is_async {
         config.async_support(true);
+    }
+    #[cfg(not(feature = "component-model-async"))]
+    {
+        let _ = is_async;
     }
     Engine::new(&config)
 }
@@ -62,8 +73,12 @@ where
         .enable_all()
         .build()?;
 
+    #[cfg(feature = "component-model-async")]
+    let async_modes = [false];
+    #[cfg(not(feature = "component-model-async"))]
+    let async_modes = [false, true];
     // Run with in sync/async mode with/without validation
-    for is_async in [false, true] {
+    for is_async in async_modes {
         for validation in [true, false] {
             let run = async {
                 run_core_module_test_with_validation(
@@ -150,7 +165,6 @@ where
 }
 
 /// Run a component test with recording and replay, testing both with and without validation
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn run_component_test<F, R>(component_wat: &str, setup_linker: F, test_fn: R) -> Result<()>
 where
     F: Fn(&mut ComponentLinker<TestState>) -> Result<()> + Clone,
@@ -167,8 +181,13 @@ where
         .enable_all()
         .build()?;
 
+    #[cfg(feature = "component-model-async")]
+    let async_modes = [false];
+    #[cfg(not(feature = "component-model-async"))]
+    let async_modes = [false, true];
+
     // Run with in sync/async mode with/without validation
-    for is_async in [false, true] {
+    for is_async in async_modes {
         for validation in [true, false] {
             let run = async {
                 run_component_test_with_validation(
@@ -190,7 +209,6 @@ where
 }
 
 /// Run a component test with recording and replay with specified validation setting
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 async fn run_component_test_with_validation<F, R>(
     component_wat: &str,
     setup_linker: F,
@@ -436,7 +454,6 @@ fn test_recording_panics_for_core_module_memory_export() {
 // Few Parameters and Few Results (not exceeding MAX_FLAT_PARAMS=16 and
 // MAX_FLAT_RESULTS=1)
 #[test]
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn test_component_under_max_params_results() -> Result<()> {
     mod test {
         use super::*;
@@ -545,7 +562,6 @@ fn test_component_under_max_params_results() -> Result<()> {
 
 // Large Record (exceeding MAX_FLAT_PARAMS=16 and MAX_FLAT_RESULTS=1)
 #[test]
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn test_component_over_max_params_results() -> Result<()> {
     mod test {
         use super::*;
@@ -709,7 +725,6 @@ fn test_component_over_max_params_results() -> Result<()> {
 }
 
 #[test]
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn test_component_tuple() -> Result<()> {
     mod test {
         use super::*;
@@ -805,7 +820,6 @@ fn test_component_tuple() -> Result<()> {
 }
 
 #[test]
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn test_component_string() -> Result<()> {
     mod test {
         use super::*;
@@ -904,7 +918,6 @@ fn test_component_string() -> Result<()> {
 }
 
 #[test]
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn test_component_variant() -> Result<()> {
     mod test {
         use super::*;
@@ -1019,7 +1032,6 @@ fn test_component_variant() -> Result<()> {
 }
 
 #[test]
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn test_component_result() -> Result<()> {
     mod test {
         use super::*;
@@ -1156,7 +1168,6 @@ fn test_component_result() -> Result<()> {
 }
 
 #[test]
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn test_component_list() -> Result<()> {
     mod test {
         use super::*;
@@ -1286,7 +1297,6 @@ fn test_component_list() -> Result<()> {
 }
 
 #[test]
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn test_component_option() -> Result<()> {
     mod test {
         use super::*;
@@ -1406,7 +1416,6 @@ fn test_component_option() -> Result<()> {
     test::run()
 }
 
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 #[test]
 fn test_component_builtins() -> Result<()> {
     run_component_test(
@@ -1511,7 +1520,6 @@ fn test_component_builtins() -> Result<()> {
     )
 }
 
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn cabi_realloc_wat() -> String {
     r#"
     (global $bump (mut i32) (i32.const 256))
@@ -1539,7 +1547,6 @@ fn cabi_realloc_wat() -> String {
     "#.to_string()
 }
 
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn shims_wat(params: &str) -> String {
     let count = params.split_whitespace().count();
     let locals_get = (0..count)
@@ -1565,7 +1572,6 @@ fn shims_wat(params: &str) -> String {
     )
 }
 
-#[cfg(all(feature = "component-model", not(feature = "component-model-async")))]
 fn instantiation_wat(core_name: &str, lift_sig: &str) -> String {
     format!(
         r#"

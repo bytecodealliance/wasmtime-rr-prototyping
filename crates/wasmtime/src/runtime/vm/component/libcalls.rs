@@ -11,7 +11,6 @@ use crate::runtime::vm::{HostResultHasUnwindSentinel, VMStore, VmSafe};
 use core::cell::Cell;
 use core::ptr::NonNull;
 use core::slice;
-use serde::{Deserialize, Serialize};
 use wasmtime_environ::component::*;
 
 const UTF16_TAG: usize = 1 << 31;
@@ -669,9 +668,6 @@ fn resource_drop(
         idx,
     )?))
 }
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct ResourceDropRet(Option<u32>);
 
 unsafe impl HostResultHasUnwindSentinel for ResourceDropRet {
     type Abi = u64;

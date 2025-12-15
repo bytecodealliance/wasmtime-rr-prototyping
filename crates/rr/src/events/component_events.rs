@@ -1,50 +1,53 @@
 //! Module comprising of component model wasm events
 
 use super::*;
-use crate::component::ComponentInstanceId;
-use crate::vm::component::libcalls::ResourceDropRet;
 use wasmtime_environ::{
     self, WasmChecksum,
-    component::{ExportIndex, InterfaceType},
+    component::{ExportIndex, InterfaceType, ResourceDropRet},
 };
 
-/// Beginning marker for a Wasm component function call from host
+/// Representation of a component instance identifier during record/replay.
+///
+/// This ID is tied to component instantiation events in the trace, and used
+/// during replay to refer to specific component instances.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+pub struct RRComponentInstanceId(pub u32);
+
+/// Beginning marker for a Wasm component function call from host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WasmFuncBeginEvent {
-    /// Instance ID for the component instance
-    pub instance: ComponentInstanceId,
-    /// Export index for the invoked function
-    pub func_idx: ExportIndex,
+    /// Instance ID for the component instance.
+    pub instance: RRComponentInstanceId,
+    /// Export index for the invoked function.
+    pub func_index: ExportIndex,
 }
 
-/// A [`Component`] instantiatation event
+/// A instantiatation event for a Wasm component.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct InstantiationEvent {
     /// Checksum of the bytecode used to instantiate the component
     pub component: WasmChecksum,
-    /// Instance ID for the instantiated component
-    pub instance: ComponentInstanceId,
+    /// Instance ID for the instantiated component.
+    pub instance: RRComponentInstanceId,
 }
 
-/// A call to `post_return` (after the function call)
+/// A call to `post_return` (after the function call).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostReturnEvent {
-    /// Instance ID for the component instance
-    pub instance: ComponentInstanceId,
-    /// Export index for the function on which post_return is invoked
-    pub func_idx: ExportIndex,
+    /// Instance ID for the component instance.
+    pub instance: RRComponentInstanceId,
+    /// Export index for the function on which post_return is invoked.
+    pub func_index: ExportIndex,
 }
 
-/// A call event from Host into a Wasm component function
+/// A call event from Host into a Wasm component function.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmFuncEntryEvent {
-    /// Raw values passed across call boundary
+    /// Raw values passed across call boundary.
     pub args: RRFuncArgVals,
 }
 
-/// A reallocation call event in the Component Model canonical ABI
-///
-/// Usually performed during lowering of complex [`ComponentType`]s to Wasm
+/// A reallocation call event in the Wasm Component Model canonical ABI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReallocEntryEvent {
     pub old_addr: usize,
@@ -53,13 +56,13 @@ pub struct ReallocEntryEvent {
     pub new_size: usize,
 }
 
-/// Entry to a type lowering invocation to flat destination
+/// Entry to a type lowering invocation to flat destination.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LowerFlatEntryEvent {
     pub ty: InterfaceType,
 }
 
-/// Entry to type lowering invocation to destination in memory
+/// Entry to type lowering invocation to destination in memory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LowerMemoryEntryEvent {
     pub ty: InterfaceType,
@@ -69,6 +72,7 @@ pub struct LowerMemoryEntryEvent {
 /// A write to a mutable slice of Wasm linear memory by the host. This is the
 /// fundamental representation of host-written data to Wasm and is usually
 /// performed during lowering of a [`ComponentType`].
+///
 /// Note that this currently signifies a single mutable operation at the smallest granularity
 /// on a given linear memory slice. These can be optimized and coalesced into
 /// larger granularity operations in the future at either the recording or the replay level.
@@ -85,18 +89,20 @@ event_error_types! {
     pub struct BuiltinError(..)
 }
 
+/// Return from a reallocation call in the Component Model canonical ABI, providing
+/// the address of allocation if successful.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReallocReturnEvent(pub ResultEvent<usize, ReallocError>);
 
-/// Return from type lowering to flat destination
+/// Return from type lowering to flat destination.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LowerFlatReturnEvent(pub ResultEvent<(), LowerFlatError>);
 
-/// Return from type lowering to destination in memory
+/// Return from type lowering to destination in memory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LowerMemoryReturnEvent(pub ResultEvent<(), LowerMemoryError>);
 
-// Macro to generate RR events from the builtin descriptions
+// Macro to generate RR events from the builtin descriptions.
 macro_rules! builtin_events {
     // Main rule matching component function definitions
     (

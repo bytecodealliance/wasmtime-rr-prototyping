@@ -9,7 +9,7 @@ use crate::prelude::*;
 use crate::rr::{DynamicMemorySlice, FixedMemorySlice};
 #[cfg(feature = "rr")]
 use crate::rr::{
-    RREvent, RecordBuffer, ReplayError, Replayer, ResultEvent, Validate,
+    RREvent, RRFuncArgValsConvertable, RecordBuffer, ReplayError, Replayer, ResultEvent, Validate,
     component_events::ReallocEntryEvent, component_events::ReallocReturnEvent,
     component_hooks::ReplayLoweringPhase,
 };

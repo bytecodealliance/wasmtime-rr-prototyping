@@ -1,9 +1,10 @@
-use crate::rr::{RREvent, ReplayError, component_events, core_events};
-use crate::store::InstanceId;
-use crate::{AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, prelude::*};
-use crate::{
-    ValRaw, component, component::Component, component::ComponentInstanceId, rr::component_hooks,
+use crate::rr::{
+    RREvent, RRFuncArgValsConvertable, ReplayError,
+    component_events::{self, RRComponentInstanceId},
+    core_events::{self, RRModuleInstanceId},
 };
+use crate::{AsContextMut, Engine, Module, ReplayReader, ReplaySettings, Store, prelude::*};
+use crate::{ValRaw, component, component::Component, rr::component_hooks};
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::mem::MaybeUninit;
 use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
@@ -97,7 +98,7 @@ pub struct ReplayHostContext {
     ///
     /// Core wasm modules can be re-entrant and invoke methods from other instances, and this
     /// needs to be accessible within host functions.
-    module_instances: BTreeMap<InstanceId, crate::Instance>,
+    module_instances: BTreeMap<RRModuleInstanceId, crate::Instance>,
     /// The currently executing module instantiation event.
     ///
     /// This must be set by the driver prior to instantiation and cleared after
@@ -116,11 +117,11 @@ impl ReplayHostContext {
     /// This is necessary for core wasm to identify re-entrant calls during replay.
     pub(crate) fn get_module_instance(
         &self,
-        id: InstanceId,
+        id: RRModuleInstanceId,
     ) -> Result<&crate::Instance, ReplayError> {
         self.module_instances
             .get(&id)
-            .ok_or(ReplayError::MissingModuleInstance(id.as_u32()))
+            .ok_or(ReplayError::MissingModuleInstance(id))
     }
 
     /// Take the current module instantiation event from the context, leaving
@@ -213,7 +214,7 @@ pub struct ReplayInstance {
     component_instances: ComponentInstanceMap,
 }
 
-struct ComponentInstanceMap(BTreeMap<ComponentInstanceId, component::Instance>);
+struct ComponentInstanceMap(BTreeMap<RRComponentInstanceId, component::Instance>);
 
 impl ComponentInstanceMap {
     fn new() -> Self {
@@ -222,25 +223,24 @@ impl ComponentInstanceMap {
 
     fn get_mut(
         &mut self,
-        id: ComponentInstanceId,
+        id: RRComponentInstanceId,
     ) -> Result<&mut component::Instance, ReplayError> {
         self.0
             .get_mut(&id)
-            .ok_or(ReplayError::MissingComponentInstance(id.as_u32()))
+            .ok_or(ReplayError::MissingComponentInstance(id))
     }
 }
 
-struct ModuleInstanceMap(BTreeMap<InstanceId, crate::Instance>);
-
+struct ModuleInstanceMap(BTreeMap<RRModuleInstanceId, crate::Instance>);
 impl ModuleInstanceMap {
     fn new() -> Self {
         Self(BTreeMap::new())
     }
 
-    fn get_mut(&mut self, id: InstanceId) -> Result<&mut crate::Instance, ReplayError> {
+    fn get_mut(&mut self, id: RRModuleInstanceId) -> Result<&mut crate::Instance, ReplayError> {
         self.0
             .get_mut(&id)
-            .ok_or(ReplayError::MissingModuleInstance(id.as_u32()))
+            .ok_or(ReplayError::MissingModuleInstance(id))
     }
 }
 
@@ -288,17 +288,19 @@ impl ReplayInstance {
     fn insert_component_instance(&mut self, instance: component::Instance) {
         self.component_instances
             .0
-            .insert(instance.id().instance(), instance);
+            .insert(instance.id().instance().into(), instance);
     }
 
     fn insert_module_instance(&mut self, instance: crate::Instance) {
-        self.module_instances.0.insert(instance.id(), instance);
+        self.module_instances
+            .0
+            .insert(instance.id().into(), instance);
         // Insert into host context tracking as well, for re-entrancy calls
         self.store
             .as_context_mut()
             .data_mut()
             .module_instances
-            .insert(instance.id(), instance);
+            .insert(instance.id().into(), instance);
     }
 
     /// Run a single top-level event from the instance.
@@ -323,7 +325,8 @@ impl ReplayInstance {
                 let instance = self.component_instances.get_mut(event.instance)?;
 
                 // Replay lowering steps and obtain raw value arguments to raw function call
-                let func = component::Func::from_lifted_func(*instance, event.func_idx);
+                let func =
+                    component::Func::from_lifted_func(*instance, Into::into(event.func_index));
                 let store = self.store.as_context_mut();
                 // Call the function
                 //
@@ -368,7 +371,8 @@ impl ReplayInstance {
             }
             RREvent::ComponentPostReturn(event) => {
                 let instance = self.component_instances.get_mut(event.instance)?;
-                let func = component::Func::from_lifted_func(*instance, event.func_idx);
+                let func =
+                    component::Func::from_lifted_func(*instance, Into::into(event.func_index));
                 let mut store = self.store.as_context_mut();
                 func.post_return(&mut store)?;
             }
@@ -382,8 +386,8 @@ impl ReplayInstance {
                 self.insert_module_instance(instance);
             }
             RREvent::CoreWasmFuncEntry(event) => {
-                let instance = self.module_instances.get_mut(event.origin.instance)?;
-                let entity = EntityIndex::from(event.origin.index);
+                let instance = self.module_instances.get_mut(event.instance.into())?;
+                let entity = Into::<EntityIndex>::into(event.func_index);
                 let mut store = self.store.as_context_mut();
                 let func = instance
                     ._get_export(store.0, entity)
@@ -430,7 +434,8 @@ impl ReplayInstance {
                 let instance = self.component_instances.get_mut(event.instance)?;
 
                 // Replay lowering steps and obtain raw value arguments to raw function call
-                let func = component::Func::from_lifted_func(*instance, event.func_idx);
+                let func =
+                    component::Func::from_lifted_func(*instance, Into::into(event.func_index));
                 let mut store = self.store.as_context_mut();
                 // Call the function
                 //
@@ -481,7 +486,8 @@ impl ReplayInstance {
             }
             RREvent::ComponentPostReturn(event) => {
                 let instance = self.component_instances.get_mut(event.instance)?;
-                let func = component::Func::from_lifted_func(*instance, event.func_idx);
+                let func =
+                    component::Func::from_lifted_func(*instance, Into::into(event.func_index));
                 let mut store = self.store.as_context_mut();
                 func.post_return_async(&mut store).await?;
             }
@@ -496,8 +502,8 @@ impl ReplayInstance {
                 self.insert_module_instance(instance);
             }
             RREvent::CoreWasmFuncEntry(event) => {
-                let instance = self.module_instances.get_mut(event.origin.instance)?;
-                let entity = EntityIndex::from(event.origin.index);
+                let instance = self.module_instances.get_mut(event.instance)?;
+                let entity = Into::<EntityIndex>::into(event.func_index);
                 let mut store = self.store.as_context_mut();
                 let func = instance
                     ._get_export(store.0, entity)

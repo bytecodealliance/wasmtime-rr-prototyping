@@ -1,16 +1,11 @@
 //! Wasmtime's Record and Replay support.
 //!
-//! This feature is currently not optimized and under development
-use crate::ValRaw;
-use ::core::{mem::MaybeUninit, slice};
+//! This provides necessary bindings of the [`wasmtime-rr`] crate into the
+//! Wasmtime runtime, as well as convenience traits and methods for working
+//! with Wasmtime's internal representations.
 
-/// Component-async-ABI is not supported for record/replay yet; add a feature gate
-//const _: () = {
-//    #[cfg(all(feature = "rr", feature = "component-model-async"))]
-//    compile_error!(
-//        "The `component-model-async` feature is not supported with the `rr` feature yet"
-//    );
-//};
+use crate::ValRaw;
+use core::{mem::MaybeUninit, slice};
 
 /// Types that can be serialized/deserialized into/from
 /// flat types for record and replay
@@ -65,11 +60,11 @@ pub(crate) use hooks::{
     component_hooks, component_hooks::DynamicMemorySlice, component_hooks::FixedMemorySlice,
 };
 
-/// Core infrastructure for RR support
+/// Core backend for RR support
 #[cfg(feature = "rr")]
-mod core;
+mod backend;
 #[cfg(feature = "rr")]
-pub use core::*;
+pub use backend::*;
 
 /// Driver capabilities for executing replays
 #[cfg(feature = "rr")]

@@ -1,374 +1,109 @@
-use crate::config::ModuleVersionStrategy;
+use super::FlatBytes;
+use crate::component::ComponentInstanceId;
 use crate::prelude::*;
-use core::fmt;
-use events::EventError;
-pub use events::{
-    RRFuncArgVals, ResultEvent, Validate, common_events, component_events, core_events,
-    marker_events,
+use crate::store::InstanceId;
+use crate::{AsContextMut, ModuleVersionStrategy, Val, ValRaw, ValType};
+use wasmtime_environ::component::FlatTypesStorage;
+
+// Public Re-exports
+pub use wasmtime_rr::{RecordSettings, RecordWriter, ReplayError, ReplayReader, ReplaySettings};
+// Crate-internal re-exports
+pub(crate) use wasmtime_rr::{
+    RREvent, RRFuncArgVals, Recorder, Replayer, ResultEvent, Validate, common_events,
+    component_events::{self, RRComponentInstanceId},
+    core_events::{self, RRModuleInstanceId},
+    from_replay_reader, to_record_writer,
 };
-pub use io::{RecordWriter, ReplayReader};
-use serde::{Deserialize, Serialize};
-use wasmtime_environ::{EntityIndex, WasmChecksum};
 
-/// Settings for execution recording.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecordSettings {
-    /// Flag to include additional signatures for replay validation.
-    pub add_validation: bool,
-    /// Maximum window size of internal event buffer.
-    pub event_window_size: usize,
+pub trait RRFuncArgValsConvertable {
+    /// Construct [`RRFuncArgVals`] from raw value buffer and a flat size iterator
+    fn from_flat_iter<T>(args: &[T], flat: impl Iterator<Item = u8>) -> Self
+    where
+        T: FlatBytes;
+
+    /// Construct [`RRFuncArgVals`] from raw value buffer and a [`FlatTypesStorage`]
+    fn from_flat_storage<T>(args: &[T], flat: FlatTypesStorage) -> RRFuncArgVals
+    where
+        T: FlatBytes;
+
+    /// Encode [`RRFuncArgVals`] back into raw value buffer
+    fn into_raw_slice<T>(self, raw_args: &mut [T])
+    where
+        T: FlatBytes;
+
+    /// Generate a vector of [`crate::Val`] from [`RRFuncArgVals`] and [`ValType`]s
+    fn to_val_vec(self, store: impl AsContextMut, val_types: Vec<ValType>) -> Vec<Val>;
 }
 
-impl Default for RecordSettings {
-    fn default() -> Self {
-        Self {
-            add_validation: false,
-            event_window_size: 16,
-        }
-    }
-}
-
-/// Settings for execution replay.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReplaySettings {
-    /// Flag to include additional signatures for replay validation.
-    pub validate: bool,
-    /// Static buffer size for deserialization of variable-length types (like [String]).
-    pub deserialize_buffer_size: usize,
-}
-
-impl Default for ReplaySettings {
-    fn default() -> Self {
-        Self {
-            validate: false,
-            deserialize_buffer_size: 64,
-        }
-    }
-}
-
-/// Encapsulation of event types comprising an [`RREvent`] sum type
-mod events;
-/// I/O support for reading and writing traces
-mod io;
-
-/// Macro template for [`RREvent`] and its conversion to/from specific
-/// event types
-macro_rules! rr_event {
-        (
-            $(
-                $(#[doc = $doc:literal])*
-                $variant:ident($event:ty)
-            ),*
-        ) => (
-        /// A single, unified, low-level recording/replay event
-        ///
-        /// This type is the narrow waist for serialization/deserialization.
-        /// Higher-level events (e.g. import calls consisting of lifts and lowers
-        /// of parameter/return types) may drop down to one or more [`RREvent`]s
-        #[derive(Debug, Clone, Serialize, Deserialize)]
-        pub enum RREvent {
-            /// Event signalling the end of a trace
-            Eof,
-            $(
-                $(#[doc = $doc])*
-                $variant($event),
-            )*
-        }
-
-        impl fmt::Display for RREvent {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                match self {
-                    Self::Eof => write!(f, "Eof event"),
-                    $(
-                    Self::$variant(e) => write!(f, "{:?}", e),
-                    )*
-                }
-            }
-        }
-
-        $(
-            impl From<$event> for RREvent {
-                fn from(value: $event) -> Self {
-                    RREvent::$variant(value)
-                }
-            }
-            impl TryFrom<RREvent> for $event {
-                type Error = ReplayError;
-                fn try_from(value: RREvent) -> Result<Self, Self::Error> {
-                    if let RREvent::$variant(x) = value {
-                        Ok(x)
-                    } else {
-                        log::error!("Expected {}; got {}", stringify!($event), value);
-                        Err(ReplayError::IncorrectEventVariant)
-                    }
-                }
-            }
-        )*
-   );
-}
-
-// Set of supported record/replay events
-rr_event! {
-    // Marker events
-    /// Nop Event
-    Nop(marker_events::NopEvent),
-    /// A custom message
-    CustomMessage(marker_events::CustomMessageEvent),
-
-    // Common events for both core or component wasm
-    // REQUIRED events
-    /// Return from host function (core or component) to host
-    HostFuncReturn(common_events::HostFuncReturnEvent),
-    // OPTIONAL events
-    /// Call into host function from Wasm (core or component)
-    HostFuncEntry(common_events::HostFuncEntryEvent),
-    /// Return from Wasm function (core or component) to host
-    WasmFuncReturn(common_events::WasmFuncReturnEvent),
-
-    // REQUIRED events for replay (Core)
-    /// Instantiation of a core Wasm module
-    CoreWasmInstantiation(core_events::InstantiationEvent),
-    /// Entry from host into a core Wasm function
-    CoreWasmFuncEntry(core_events::WasmFuncEntryEvent),
-
-    // REQUIRED events for replay (Component)
-
-    /// Starting marker for a Wasm component function call from host
-    ///
-    /// This is distinguished from `ComponentWasmFuncEntry` as there may
-    /// be multiple lowering steps before actually entering the Wasm function
-    ComponentWasmFuncBegin(component_events::WasmFuncBeginEvent),
-    /// Entry from the host into the Wasm component function
-    ComponentWasmFuncEntry(component_events::WasmFuncEntryEvent),
-    /// Instantiation of a component
-    ComponentInstantiation(component_events::InstantiationEvent),
-    /// Component ABI realloc call in linear wasm memory
-    ComponentReallocEntry(component_events::ReallocEntryEvent),
-    /// Return from a type lowering operation
-    ComponentLowerFlatReturn(component_events::LowerFlatReturnEvent),
-    /// Return from a store during a type lowering operation
-    ComponentLowerMemoryReturn(component_events::LowerMemoryReturnEvent),
-    /// An attempt to obtain a mutable slice into Wasm linear memory
-    ComponentMemorySliceWrite(component_events::MemorySliceWriteEvent),
-    /// Return from a component builtin
-    ComponentBuiltinReturn(component_events::BuiltinReturnEvent),
-    /// Call to `post_return` (after the function call)
-    ComponentPostReturn(component_events::PostReturnEvent),
-
-    // OPTIONAL events for replay validation (Component)
-
-    /// Return from Component ABI realloc call
-    ///
-    /// Since realloc is deterministic, ReallocReturn is optional.
-    /// Any error is subsumed by the containing LowerReturn/LowerStoreReturn
-    /// that triggered realloc
-    ComponentReallocReturn(component_events::ReallocReturnEvent),
-    /// Call into type lowering for flat destination
-    ComponentLowerFlatEntry(component_events::LowerFlatEntryEvent),
-    /// Call into type lowering for memory destination
-    ComponentLowerMemoryEntry(component_events::LowerMemoryEntryEvent),
-    /// Call into a component builtin
-    ComponentBuiltinEntry(component_events::BuiltinEntryEvent)
-}
-
-impl RREvent {
-    /// Indicates whether current event is a marker event
+impl RRFuncArgValsConvertable for RRFuncArgVals {
     #[inline]
-    fn is_marker(&self) -> bool {
-        match self {
-            Self::Nop(_) | Self::CustomMessage(_) => true,
-            _ => false,
-        }
-    }
-}
-
-/// Error type signalling failures during a replay run
-#[derive(Debug)]
-pub enum ReplayError {
-    EmptyBuffer,
-    FailedValidation,
-    IncorrectEventVariant,
-    InvalidEventPosition,
-    FailedRead(anyhow::Error),
-    EventError(Box<dyn EventError>),
-    MissingComponent(WasmChecksum),
-    MissingModule(WasmChecksum),
-    MissingComponentInstance(u32),
-    MissingModuleInstance(u32),
-    InvalidCoreFuncIndex(EntityIndex),
-}
-
-impl fmt::Display for ReplayError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EmptyBuffer => {
-                write!(f, "replay buffer is empty")
-            }
-            Self::FailedValidation => {
-                write!(
-                    f,
-                    "failed validation check during replay; see wasmtime log for error"
-                )
-            }
-            Self::IncorrectEventVariant => {
-                write!(f, "event type mismatch during replay")
-            }
-            Self::EventError(e) => {
-                write!(f, "{:?}", e)
-            }
-            Self::FailedRead(e) => {
-                write!(f, "{}", e)?;
-                f.write_str("Note: Ensure sufficient `deserialization-buffer-size` in replay settings if you included `validation-metadata` during recording")
-            }
-            Self::InvalidEventPosition => {
-                write!(f, "event occured at an invalid position in the trace")
-            }
-            Self::MissingComponent(checksum) => {
-                write!(
-                    f,
-                    "missing component binary with checksum 0x{} during replay",
-                    checksum
-                        .iter()
-                        .map(|b| format!("{:02x}", b))
-                        .collect::<String>()
-                )
-            }
-            Self::MissingModule(checksum) => {
-                write!(
-                    f,
-                    "missing module binary with checksum {:02x?} during replay",
-                    checksum
-                        .iter()
-                        .map(|b| format!("{:02x}", b))
-                        .collect::<String>()
-                )
-            }
-            Self::MissingComponentInstance(id) => {
-                write!(f, "missing component instance ID {:?} during replay", id)
-            }
-            Self::MissingModuleInstance(id) => {
-                write!(f, "missing module instance ID {:?} during replay", id)
-            }
-            Self::InvalidCoreFuncIndex(index) => {
-                write!(f, "replay core func ({:?}) during replay is invalid", index)
-            }
-        }
-    }
-}
-
-impl core::error::Error for ReplayError {}
-
-impl<T: EventError> From<T> for ReplayError {
-    fn from(value: T) -> Self {
-        Self::EventError(Box::new(value))
-    }
-}
-
-/// This trait provides the interface for a FIFO recorder
-pub trait Recorder {
-    /// Construct a recorder with the writer backend
-    fn new_recorder(writer: impl RecordWriter, settings: RecordSettings) -> Result<Self>
+    fn from_flat_iter<T>(args: &[T], flat: impl Iterator<Item = u8>) -> RRFuncArgVals
     where
-        Self: Sized;
-
-    /// Record the event generated by `f`
-    ///
-    /// ## Error
-    ///
-    /// Propogates from underlying writer
-    fn record_event<T, F>(&mut self, f: F) -> Result<()>
-    where
-        T: Into<RREvent>,
-        F: FnOnce() -> T;
-
-    /// Consumes this [`Recorder`] and returns its underlying writer
-    fn into_writer(self) -> Result<Box<dyn RecordWriter>>;
-
-    /// Trigger an explicit flush of any buffered data to the writer
-    ///
-    /// Buffer should be emptied during this process
-    fn flush(&mut self) -> Result<()>;
-
-    /// Get settings associated with the recording process
-    fn settings(&self) -> &RecordSettings;
-
-    // Provided methods
-
-    /// Record a event only when validation is requested
-    #[inline]
-    fn record_event_validation<T, F>(&mut self, f: F) -> Result<()>
-    where
-        T: Into<RREvent>,
-        F: FnOnce() -> T,
+        T: FlatBytes,
     {
-        let settings = self.settings();
-        if settings.add_validation {
-            self.record_event(f)?;
+        let mut bytes = Vec::new();
+        let mut sizes = Vec::new();
+        for (flat_size, arg) in flat.zip(args.iter()) {
+            bytes.extend_from_slice(unsafe { &arg.bytes(flat_size) });
+            sizes.push(flat_size);
         }
-        Ok(())
+        RRFuncArgVals { bytes, sizes }
+    }
+
+    /// Construct [`RRFuncArgVals`] from raw value buffer and a [`FlatTypesStorage`]
+    #[inline]
+    fn from_flat_storage<T>(args: &[T], flat: FlatTypesStorage) -> RRFuncArgVals
+    where
+        T: FlatBytes,
+    {
+        RRFuncArgVals::from_flat_iter(args, flat.iter32())
+    }
+
+    /// Encode [`RRFuncArgVals`] back into raw value buffer
+    #[inline]
+    fn into_raw_slice<T>(self, raw_args: &mut [T])
+    where
+        T: FlatBytes,
+    {
+        let mut pos = 0;
+        for (flat_size, dst) in self.sizes.into_iter().zip(raw_args.iter_mut()) {
+            *dst = T::from_bytes(&self.bytes[pos..pos + flat_size as usize]);
+            pos += flat_size as usize;
+        }
+    }
+
+    /// Generate a vector of [`crate::Val`] from [`RRFuncArgVals`] and [`ValType`]s
+    #[inline]
+    fn to_val_vec(self, mut store: impl AsContextMut, val_types: Vec<ValType>) -> Vec<Val> {
+        let mut pos = 0;
+        let mut vals = Vec::new();
+        for (flat_size, val_type) in self.sizes.into_iter().zip(val_types.into_iter()) {
+            let raw = ValRaw::from_bytes(&self.bytes[pos..pos + flat_size as usize]);
+            // SAFETY: The safety contract here is the same as that of [`Val::from_raw`].
+            // The caller must ensure that raw has the type provided.
+            vals.push(unsafe { Val::from_raw(&mut store, raw, val_type) });
+            pos += flat_size as usize;
+        }
+        vals
     }
 }
 
-/// This trait provides the interface for a FIFO replayer that
-/// essentially operates as an iterator over the recorded events
-pub trait Replayer: Iterator<Item = Result<RREvent, ReplayError>> {
-    /// Constructs a reader on buffer
-    fn new_replayer(reader: impl ReplayReader + 'static, settings: ReplaySettings) -> Result<Self>
-    where
-        Self: Sized;
-
-    /// Get settings associated with the replay process
-    fn settings(&self) -> &ReplaySettings;
-
-    /// Get the settings (embedded within the trace) during recording
-    fn trace_settings(&self) -> &RecordSettings;
-
-    // Provided Methods
-
-    /// Get the next functional replay event (skips past all non-marker events)
-    #[inline]
-    fn next_event(&mut self) -> Result<RREvent, ReplayError> {
-        self.next().ok_or(ReplayError::EmptyBuffer)?
+// Conversions from Wasmtime types to RR types
+impl Into<RRComponentInstanceId> for ComponentInstanceId {
+    fn into(self) -> RRComponentInstanceId {
+        RRComponentInstanceId(self.as_u32())
     }
+}
 
-    /// Pop the next replay event with an attemped type conversion to expected
-    /// event type
-    ///
-    /// ## Errors
-    ///
-    /// Returns a  [`ReplayError::IncorrectEventVariant`] if it failed to convert typecheck event safely
-    #[inline]
-    fn next_event_typed<T>(&mut self) -> Result<T, ReplayError>
-    where
-        T: TryFrom<RREvent>,
-        ReplayError: From<<T as TryFrom<RREvent>>::Error>,
-    {
-        T::try_from(self.next_event()?).map_err(|e| e.into())
+impl Into<RRModuleInstanceId> for InstanceId {
+    fn into(self) -> RRModuleInstanceId {
+        RRModuleInstanceId(self.as_u32())
     }
+}
 
-    /// Conditionally process the next validation recorded event and if
-    /// replay validation is enabled, run the validation check
-    ///
-    /// ## Errors
-    ///
-    /// In addition to errors in [`next_event_typed`](Replayer::next_event_typed),
-    /// validation errors can be thrown
-    #[inline]
-    fn next_event_validation<T, Y>(&mut self, expect: &Y) -> Result<(), ReplayError>
-    where
-        T: TryFrom<RREvent> + Validate<Y>,
-        ReplayError: From<<T as TryFrom<RREvent>>::Error>,
-    {
-        if self.trace_settings().add_validation {
-            let event = self.next_event_typed::<T>()?;
-            if self.settings().validate {
-                event.validate(expect)
-            } else {
-                Ok(())
-            }
-        } else {
-            Ok(())
-        }
+impl From<RRModuleInstanceId> for InstanceId {
+    fn from(rr_id: RRModuleInstanceId) -> Self {
+        InstanceId::from_u32(rr_id.0)
     }
 }
 
@@ -405,8 +140,8 @@ impl RecordBuffer {
 impl Recorder for RecordBuffer {
     fn new_recorder(mut writer: impl RecordWriter, settings: RecordSettings) -> Result<Self> {
         // Replay requires the Module version and record settings
-        io::to_record_writer(ModuleVersionStrategy::WasmtimeVersion.as_str(), &mut writer)?;
-        io::to_record_writer(&settings, &mut writer)?;
+        to_record_writer(ModuleVersionStrategy::WasmtimeVersion.as_str(), &mut writer)?;
+        to_record_writer(&settings, &mut writer)?;
         Ok(RecordBuffer {
             buf: Vec::new(),
             writer: Box::new(writer),
@@ -434,7 +169,7 @@ impl Recorder for RecordBuffer {
     fn flush(&mut self) -> Result<()> {
         log::debug!("Flushing record buffer...");
         for e in self.buf.drain(..) {
-            io::to_record_writer(&e, &mut *self.writer)?;
+            to_record_writer(&e, &mut *self.writer)?;
         }
         return Ok(());
     }
@@ -467,7 +202,7 @@ impl Iterator for ReplayBuffer {
             return None;
         }
         let ret = 'event_loop: loop {
-            let result = io::from_replay_reader(&mut *self.reader, &mut self.deser_buffer);
+            let result = from_replay_reader(&mut *self.reader, &mut self.deser_buffer);
             match result {
                 Err(e) => {
                     break 'event_loop Some(Err(ReplayError::FailedRead(e)));
@@ -516,7 +251,7 @@ impl Replayer for ReplayBuffer {
     ) -> Result<Self> {
         let mut scratch = [0u8; 12];
         // Ensure module versions match
-        let version = io::from_replay_reader::<&str, _>(&mut reader, &mut scratch)?;
+        let version = from_replay_reader::<&str, _>(&mut reader, &mut scratch)?;
         assert_eq!(
             version,
             ModuleVersionStrategy::WasmtimeVersion.as_str(),
@@ -524,7 +259,7 @@ impl Replayer for ReplayBuffer {
         );
 
         // Read the recording settings
-        let trace_settings: RecordSettings = io::from_replay_reader(&mut reader, &mut scratch)?;
+        let trace_settings: RecordSettings = from_replay_reader(&mut reader, &mut scratch)?;
 
         if settings.validate && !trace_settings.add_validation {
             log::warn!(
@@ -569,11 +304,11 @@ mod tests {
     use crate::ValRaw;
     use crate::WasmFuncOrigin;
     use crate::store::InstanceId;
-    use crate::vm::component::libcalls::ResourceDropRet;
     use std::fs::File;
     use std::path::Path;
     use tempfile::{NamedTempFile, TempPath};
-    use wasmtime_environ::FuncIndex;
+    use wasmtime_environ::{FuncIndex, component::ResourceDropRet};
+    use wasmtime_rr::EventError;
 
     impl ReplayBuffer {
         /// Pop the next replay event and calls `f` with a expected event type
@@ -703,7 +438,8 @@ mod tests {
         rr_harness(
             |recorder| {
                 recorder.record_event(|| core_events::WasmFuncEntryEvent {
-                    origin: origin.clone(),
+                    instance: origin.instance.into(),
+                    func_index: origin.index.into(),
                     args: RRFuncArgVals::from_flat_iter(&values, flat_sizes.iter().copied()),
                 })?;
                 recorder.record_event(|| component_events::WasmFuncEntryEvent {
@@ -715,7 +451,10 @@ mod tests {
             },
             |replayer| {
                 replayer.next_event_and(|event: core_events::WasmFuncEntryEvent| {
-                    replay_origin = Some(event.origin);
+                    replay_origin = Some(WasmFuncOrigin {
+                        instance: event.instance.into(),
+                        index: event.func_index.into(),
+                    });
                     event.args.into_raw_slice(&mut replay_values);
                     Ok(())
                 })?;
@@ -998,12 +737,12 @@ mod tests {
 
         let component_event = ComponentInstantiationEvent {
             component: WasmChecksum::from_binary(&[0xAB; 256]),
-            instance: ComponentInstanceId::from_u32(42),
+            instance: ComponentInstanceId::from_u32(42).into(),
         };
 
         let core_event = CoreInstantiationEvent {
             module: WasmChecksum::from_binary(&[0xCD; 256]),
-            instance: InstanceId::from_u32(17),
+            instance: InstanceId::from_u32(17).into(),
         };
 
         rr_harness(

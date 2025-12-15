@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use anyhow::Result;
 use core::any::Any;
 use postcard;
 use serde::{Deserialize, Serialize};
@@ -133,7 +133,7 @@ cfg_if::cfg_if! {
 /// Serialize and write `value` to a `RecordWriter`
 ///
 /// Currently uses `postcard` serializer
-pub(super) fn to_record_writer<T, W>(value: &T, writer: &mut W) -> Result<()>
+pub fn to_record_writer<T, W>(value: &T, writer: &mut W) -> Result<()>
 where
     T: Serialize + ?Sized,
     W: RecordWriter + ?Sized,
@@ -154,7 +154,7 @@ where
 ///
 /// Currently uses `postcard` deserializer, with optional scratch
 /// buffer to deserialize into
-pub(super) fn from_replay_reader<'a, T, R>(reader: &'a mut R, scratch: &'a mut [u8]) -> Result<T>
+pub fn from_replay_reader<'a, T, R>(reader: &'a mut R, scratch: &'a mut [u8]) -> Result<T>
 where
     T: Deserialize<'a>,
     R: ReplayReader + ?Sized,

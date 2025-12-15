@@ -4536,6 +4536,7 @@ dependencies = [
  "wasmtime-internal-versioned-export-macros",
  "wasmtime-internal-winch",
  "wasmtime-internal-wmemcheck",
+ "wasmtime-rr",
  "wasmtime-test-util",
  "wat",
  "windows-sys 0.61.2",
@@ -4972,6 +4973,18 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-wmemcheck"
 version = "40.0.0"
+
+[[package]]
+name = "wasmtime-rr"
+version = "40.0.0"
+dependencies = [
+ "anyhow",
+ "cfg-if",
+ "log",
+ "postcard",
+ "serde",
+ "wasmtime-environ",
+]
 
 [[package]]
 name = "wasmtime-test-macros"
