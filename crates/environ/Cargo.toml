@@ -37,9 +37,7 @@ wasmprinter = { workspace = true, optional = true }
 wasmtime-component-util = { workspace = true, optional = true }
 semver = { workspace = true, optional = true, features = ['serde'] }
 smallvec = { workspace = true, features = ['serde'] }
-# NB: LLVM unable to compile sha2 with 'asm' in 'no_std' as of Rustc/Cargo version 1.91.1.
-# Currently uses 'force-soft' in 'no_std', but remove if fixed.
-sha2 = { version = "0.10.2", default-features = false, features = ['force-soft'] }
+sha2 = { version = "0.10.2", default-features = false }
 
 [dev-dependencies]
 clap = { workspace = true, features = ['default'] }

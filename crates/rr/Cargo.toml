@@ -24,5 +24,4 @@ log = { workspace = true }
 cfg-if = { workspace = true }
 
 [features]
-default = ["std"]
 std = ["postcard/use-std", "wasmtime-environ/std"]
