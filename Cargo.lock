@@ -4983,6 +4983,7 @@ dependencies = [
  "log",
  "postcard",
  "serde",
+ "serde_derive",
  "wasmtime-environ",
 ]
 

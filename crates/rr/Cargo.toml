@@ -18,6 +18,7 @@ all-features = true
 [dependencies]
 wasmtime-environ = { workspace = true, features = ["component-model"] }
 serde = { workspace = true }
+serde_derive = { workspace = true }
 postcard = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }

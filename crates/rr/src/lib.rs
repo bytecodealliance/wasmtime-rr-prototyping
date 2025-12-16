@@ -1,13 +1,24 @@
-use anyhow::Result;
-use core::fmt;
+#![no_std]
+
+pub(crate) mod prelude {
+    pub use anyhow::{self, Result};
+    pub use serde::{Deserialize, Serialize};
+    pub use wasmtime_environ::prelude::*;
+}
+
+use crate::prelude::*;
+pub use core::fmt;
 pub use events::{
     EventError, RRFuncArgVals, ResultEvent, Validate, common_events, component_events, core_events,
 };
+use events::{component_events::RRComponentInstanceId, core_events::RRModuleInstanceId};
 pub use io::{RecordWriter, ReplayReader, from_replay_reader, to_record_writer};
-use serde::{Deserialize, Serialize};
 use wasmtime_environ::{EntityIndex, WasmChecksum};
 
-use events::{component_events::RRComponentInstanceId, core_events::RRModuleInstanceId};
+/// Encapsulation of event types comprising an [`RREvent`] sum type
+mod events;
+/// I/O support for reading and writing traces
+mod io;
 
 /// Settings for execution recording.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,11 +55,6 @@ impl Default for ReplaySettings {
         }
     }
 }
-
-/// Encapsulation of event types comprising an [`RREvent`] sum type
-mod events;
-/// I/O support for reading and writing traces
-mod io;
 
 /// Macro template for [`RREvent`] and its conversion to/from specific
 /// event types

@@ -1,10 +1,10 @@
-use super::RREvent;
-use anyhow::Result;
+use crate::{RREvent, prelude::*};
 use core::any::Any;
 use postcard;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "std")] {
+        extern crate std;
         use std::io::{Write, Seek, Read};
         /// A writer for recording in RR.
         pub trait RecordWriter: Write + Send + Sync + Any {}
