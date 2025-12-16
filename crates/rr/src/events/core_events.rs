@@ -15,15 +15,15 @@ pub struct RRModuleInstanceId(pub u32);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct RRModuleFuncIndex(pub u32);
 
-impl Into<FuncIndex> for RRModuleFuncIndex {
-    fn into(self) -> FuncIndex {
-        FuncIndex::from_u32(self.0)
+impl From<RRModuleFuncIndex> for FuncIndex {
+    fn from(r: RRModuleFuncIndex) -> Self {
+        FuncIndex::from_u32(r.0)
     }
 }
 
-impl Into<EntityIndex> for RRModuleFuncIndex {
-    fn into(self) -> EntityIndex {
-        EntityIndex::from(Into::<FuncIndex>::into(self))
+impl From<RRModuleFuncIndex> for EntityIndex {
+    fn from(r: RRModuleFuncIndex) -> Self {
+        EntityIndex::from(FuncIndex::from(r))
     }
 }
 

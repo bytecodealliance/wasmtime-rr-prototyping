@@ -325,8 +325,7 @@ impl ReplayInstance {
                 let instance = self.component_instances.get_mut(event.instance)?;
 
                 // Replay lowering steps and obtain raw value arguments to raw function call
-                let func =
-                    component::Func::from_lifted_func(*instance, Into::into(event.func_index));
+                let func = component::Func::from_lifted_func(*instance, event.func_index);
                 let store = self.store.as_context_mut();
                 // Call the function
                 //
@@ -371,8 +370,7 @@ impl ReplayInstance {
             }
             RREvent::ComponentPostReturn(event) => {
                 let instance = self.component_instances.get_mut(event.instance)?;
-                let func =
-                    component::Func::from_lifted_func(*instance, Into::into(event.func_index));
+                let func = component::Func::from_lifted_func(*instance, event.func_index);
                 let mut store = self.store.as_context_mut();
                 func.post_return(&mut store)?;
             }
@@ -386,8 +384,8 @@ impl ReplayInstance {
                 self.insert_module_instance(instance);
             }
             RREvent::CoreWasmFuncEntry(event) => {
-                let instance = self.module_instances.get_mut(event.instance.into())?;
-                let entity = Into::<EntityIndex>::into(event.func_index);
+                let instance = self.module_instances.get_mut(event.instance)?;
+                let entity = EntityIndex::from(event.func_index);
                 let mut store = self.store.as_context_mut();
                 let func = instance
                     ._get_export(store.0, entity)
@@ -409,7 +407,7 @@ impl ReplayInstance {
             }
 
             _ => {
-                log::error!("Unexpected top-level RR event: {:?}", rr_event);
+                log::error!("Unexpected top-level RR event: {rr_event:?}");
                 Err(ReplayError::IncorrectEventVariant)?
             }
         }
@@ -434,8 +432,7 @@ impl ReplayInstance {
                 let instance = self.component_instances.get_mut(event.instance)?;
 
                 // Replay lowering steps and obtain raw value arguments to raw function call
-                let func =
-                    component::Func::from_lifted_func(*instance, Into::into(event.func_index));
+                let func = component::Func::from_lifted_func(*instance, event.func_index);
                 let mut store = self.store.as_context_mut();
                 // Call the function
                 //
@@ -486,8 +483,7 @@ impl ReplayInstance {
             }
             RREvent::ComponentPostReturn(event) => {
                 let instance = self.component_instances.get_mut(event.instance)?;
-                let func =
-                    component::Func::from_lifted_func(*instance, Into::into(event.func_index));
+                let func = component::Func::from_lifted_func(*instance, event.func_index);
                 let mut store = self.store.as_context_mut();
                 func.post_return_async(&mut store).await?;
             }
@@ -503,7 +499,7 @@ impl ReplayInstance {
             }
             RREvent::CoreWasmFuncEntry(event) => {
                 let instance = self.module_instances.get_mut(event.instance)?;
-                let entity = Into::<EntityIndex>::into(event.func_index);
+                let entity = EntityIndex::from(event.func_index);
                 let mut store = self.store.as_context_mut();
                 let func = instance
                     ._get_export(store.0, entity)
@@ -529,7 +525,7 @@ impl ReplayInstance {
             }
 
             _ => {
-                log::error!("Unexpected top-level RR event: {:?}", rr_event);
+                log::error!("Unexpected top-level RR event: {rr_event:?}");
                 Err(ReplayError::IncorrectEventVariant)?
             }
         }

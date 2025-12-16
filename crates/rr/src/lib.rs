@@ -214,10 +214,10 @@ impl fmt::Display for ReplayError {
                 write!(f, "event type mismatch during replay")
             }
             Self::EventError(e) => {
-                write!(f, "{:?}", e)
+                write!(f, "{e:?}")
             }
             Self::FailedRead(e) => {
-                write!(f, "{}", e)?;
+                write!(f, "{e}")?;
                 f.write_str("Note: Ensure sufficient `deserialization-buffer-size` in replay settings if you included `validation-metadata` during recording")
             }
             Self::InvalidEventPosition => {
@@ -229,7 +229,7 @@ impl fmt::Display for ReplayError {
                     "missing component binary with checksum 0x{} during replay",
                     checksum
                         .iter()
-                        .map(|b| format!("{:02x}", b))
+                        .map(|b| format!("{b:02x}"))
                         .collect::<String>()
                 )
             }
@@ -239,18 +239,18 @@ impl fmt::Display for ReplayError {
                     "missing module binary with checksum {:02x?} during replay",
                     checksum
                         .iter()
-                        .map(|b| format!("{:02x}", b))
+                        .map(|b| format!("{b:02x}"))
                         .collect::<String>()
                 )
             }
             Self::MissingComponentInstance(id) => {
-                write!(f, "missing component instance ID {:?} during replay", id)
+                write!(f, "missing component instance ID {id:?} during replay")
             }
             Self::MissingModuleInstance(id) => {
-                write!(f, "missing module instance ID {:?} during replay", id)
+                write!(f, "missing module instance ID {id:?} during replay")
             }
             Self::InvalidCoreFuncIndex(index) => {
-                write!(f, "replay core func ({:?}) during replay is invalid", index)
+                write!(f, "replay core func ({index:?}) during replay is invalid")
             }
         }
     }

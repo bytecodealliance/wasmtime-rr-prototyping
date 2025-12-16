@@ -225,7 +225,7 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>,
 {
     // === RECORDING PHASE ===
-    log::info!("Recording | Validate: {}, Async: {}", validate, is_async);
+    log::info!("Recording | Validate: {validate}, Async: {is_async}");
     let engine = create_recording_engine(is_async)?;
     let component = Component::new(&engine, component_wat)?;
 
@@ -255,7 +255,7 @@ where
     trace_reader.set_position(0);
 
     // === REPLAY PHASE ===
-    log::info!("Replaying | Validate: {}, Async: {}", validate, is_async);
+    log::info!("Replaying | Validate: {validate}, Async: {is_async}");
     let engine = create_replay_engine(is_async)?;
     let component = Component::new(&engine, component_wat)?;
     let replay_settings = ReplaySettings {
@@ -1550,7 +1550,7 @@ fn cabi_realloc_wat() -> String {
 fn shims_wat(params: &str) -> String {
     let count = params.split_whitespace().count();
     let locals_get = (0..count)
-        .map(|i| format!("local.get {}", i))
+        .map(|i| format!("local.get {i}"))
         .collect::<Vec<_>>()
         .join("\n");
     format!(

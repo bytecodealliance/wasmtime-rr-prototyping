@@ -40,9 +40,9 @@ impl fmt::Debug for RRFuncArgVals {
             let hex_string = bytes
                 .iter()
                 .rev()
-                .map(|b| format!("{:02x}", b))
+                .map(|b| format!("{b:02x}"))
                 .collect::<String>();
-            format!("0x{}", hex_string)
+            format!("0x{hex_string}")
         };
         for flat_size in self.sizes.iter() {
             list.entry(&(
@@ -72,7 +72,7 @@ pub trait Validate<T: ?Sized> {
     where
         Self: fmt::Debug,
     {
-        log::debug!("Validating => {:?}", self);
+        log::debug!("Validating => {self:?}");
     }
 }
 
@@ -86,7 +86,7 @@ where
         if self == expect {
             Ok(())
         } else {
-            log::error!("Validation against {:?} failed!", expect);
+            log::error!("Validation against {expect:?} failed!");
             Err(ReplayError::FailedValidation)
         }
     }

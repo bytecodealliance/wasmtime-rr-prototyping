@@ -89,15 +89,15 @@ impl RRFuncArgValsConvertable for RRFuncArgVals {
 }
 
 // Conversions from Wasmtime types to RR types
-impl Into<RRComponentInstanceId> for ComponentInstanceId {
-    fn into(self) -> RRComponentInstanceId {
-        RRComponentInstanceId(self.as_u32())
+impl From<ComponentInstanceId> for RRComponentInstanceId {
+    fn from(id: ComponentInstanceId) -> Self {
+        RRComponentInstanceId(id.as_u32())
     }
 }
 
-impl Into<RRModuleInstanceId> for InstanceId {
-    fn into(self) -> RRModuleInstanceId {
-        RRModuleInstanceId(self.as_u32())
+impl From<InstanceId> for RRModuleInstanceId {
+    fn from(id: InstanceId) -> Self {
+        RRModuleInstanceId(id.as_u32())
     }
 }
 
@@ -145,7 +145,7 @@ impl Recorder for RecordBuffer {
         Ok(RecordBuffer {
             buf: Vec::new(),
             writer: Box::new(writer),
-            settings: settings,
+            settings,
         })
     }
 
@@ -214,7 +214,7 @@ impl Iterator for ReplayBuffer {
                     } else if event.is_marker() {
                         continue 'event_loop;
                     } else {
-                        log::debug!("Read replay event => {}", event);
+                        log::debug!("Read replay event => {event}");
                         break 'event_loop Some(Ok(event));
                     }
                 }
@@ -376,9 +376,7 @@ mod tests {
             let b_slice: &[u8] = &b.get_bytes()[..*sz as usize];
             assert!(
                 a_slice == b_slice,
-                "Recorded values {:?} and replayed values {:?} do not match",
-                a_slice,
-                b_slice
+                "Recorded values {a_slice:?} and replayed values {b_slice:?} do not match"
             );
         }
         Ok(())

@@ -43,7 +43,7 @@ pub fn record_wasm_func_begin(
     #[cfg(feature = "rr")]
     store.record_event(|| WasmFuncBeginEvent {
         instance: instance.into(),
-        func_index: func_index.into(),
+        func_index,
     })?;
     let _ = (instance, func_index, store);
     Ok(())
@@ -59,7 +59,7 @@ pub fn record_wasm_func_post_return<T>(
     #[cfg(feature = "rr")]
     store.0.record_event(|| PostReturnEvent {
         instance: instance.into(),
-        func_index: func_index.into(),
+        func_index,
     })?;
     let _ = (instance, func_index, store);
     Ok(())
@@ -93,7 +93,7 @@ where
     #[cfg(feature = "rr")]
     {
         if let Err(e) = &result {
-            log::warn!("Wasm function call exited with error: {:?}", e);
+            log::warn!("Wasm function call exited with error: {e:?}");
         }
         let flat_results = types.flat_types_storage_or_pointer(
             &InterfaceType::Tuple(types[type_idx].results),

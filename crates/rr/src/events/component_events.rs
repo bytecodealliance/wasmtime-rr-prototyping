@@ -177,7 +177,6 @@ macro_rules! builtin_events {
                 type Error = ReplayError;
 
                 fn try_from(value: $enum) -> Result<Self, Self::Error> {
-                    #[allow(irrefutable_let_patterns)]
                     if let $enum::$rr_var(x) = value {
                         Ok(x)
                     } else {

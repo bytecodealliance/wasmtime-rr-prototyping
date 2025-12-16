@@ -290,9 +290,9 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         FixedMemorySlice {
             bytes: slice_mut[offset..].first_chunk_mut().unwrap(),
             #[cfg(feature = "rr")]
-            offset: offset,
+            offset,
             #[cfg(feature = "rr")]
-            recorder: recorder,
+            recorder,
         }
     }
 
@@ -314,9 +314,9 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         DynamicMemorySlice {
             bytes: &mut slice_mut[offset..][..size],
             #[cfg(feature = "rr")]
-            offset: offset,
+            offset,
             #[cfg(feature = "rr")]
-            recorder: recorder,
+            recorder,
         }
     }
 
@@ -526,7 +526,7 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                     }
                 }
                 _ => {
-                    bail!("Invalid event \'{:?}\' encountered during lowering", event);
+                    bail!("Invalid event \'{event:?}\' encountered during lowering");
                 }
             };
         }

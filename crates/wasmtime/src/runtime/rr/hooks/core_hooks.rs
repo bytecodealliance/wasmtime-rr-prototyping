@@ -46,7 +46,7 @@ where
     {
         if origin.is_some() {
             if let Err(e) = &result {
-                log::warn!("Wasm function call exited with error: {:?}", e);
+                log::warn!("Wasm function call exited with error: {e:?}");
             }
             let flat = ty.results().map(|t| t.to_wasm_type().byte_size());
             let result = result.map(|_| RRFuncArgVals::from_flat_iter(args, flat));
@@ -148,7 +148,7 @@ where
                 }
                 // Re-entrant call into wasm function: this resembles the implementation in [`ReplayInstance`]
                 RREvent::CoreWasmFuncEntry(event) => {
-                    let entity = Into::<EntityIndex>::into(event.func_index);
+                    let entity = EntityIndex::from(event.func_index);
 
                     // Unwrapping the `replay_buffer_mut()` above ensures that we are in replay mode
                     // passing the safety contract for `replay_data_from_store`
@@ -182,10 +182,7 @@ where
                     }
                 }
                 _ => {
-                    bail!(
-                        "Unexpected event during core wasm host function replay: {:?}",
-                        event
-                    );
+                    bail!("Unexpected event during core wasm host function replay: {event:?}",);
                 }
             }
         }
