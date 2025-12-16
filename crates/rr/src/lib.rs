@@ -2,7 +2,6 @@ use anyhow::Result;
 use core::fmt;
 pub use events::{
     EventError, RRFuncArgVals, ResultEvent, Validate, common_events, component_events, core_events,
-    marker_events,
 };
 pub use io::{RecordWriter, ReplayReader, from_replay_reader, to_record_writer};
 use serde::{Deserialize, Serialize};
@@ -54,12 +53,17 @@ mod io;
 /// Macro template for [`RREvent`] and its conversion to/from specific
 /// event types
 macro_rules! rr_event {
-        (
-            $(
-                $(#[doc = $doc:literal])*
-                $variant:ident($event:ty)
-            ),*
-        ) => (
+    (
+        $(
+            $(#[doc = $doc_np:literal])*
+            $variant_no_payload:ident
+        ),*
+        ;
+        $(
+            $(#[doc = $doc:literal])*
+            $variant:ident($event:ty)
+        ),*
+    ) => (
         /// A single, unified, low-level recording/replay event
         ///
         /// This type is the narrow waist for serialization/deserialization.
@@ -67,8 +71,10 @@ macro_rules! rr_event {
         /// of parameter/return types) may drop down to one or more [`RREvent`]s
         #[derive(Debug, Clone, Serialize, Deserialize)]
         pub enum RREvent {
-            /// Event signalling the end of a trace
-            Eof,
+            $(
+                $(#[doc = $doc_np])*
+                $variant_no_payload,
+            )*
             $(
                 $(#[doc = $doc])*
                 $variant($event),
@@ -78,9 +84,11 @@ macro_rules! rr_event {
         impl fmt::Display for RREvent {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 match self {
-                    Self::Eof => write!(f, "Eof event"),
                     $(
-                    Self::$variant(e) => write!(f, "{:?}", e),
+                        Self::$variant_no_payload => write!(f, "{}", stringify!($variant_no_payload)),
+                    )*
+                    $(
+                        Self::$variant(payload) => write!(f, "{:?}", payload),
                     )*
                 }
             }
@@ -104,16 +112,25 @@ macro_rules! rr_event {
                 }
             }
         )*
-   );
+    );
+
 }
 
 // Set of supported record/replay events
 rr_event! {
-    // Marker events
     /// Nop Event
-    Nop(marker_events::NopEvent),
-    /// A custom message
-    CustomMessage(marker_events::CustomMessageEvent),
+    Nop,
+    /// Event signalling the end of a trace
+    Eof
+    ;
+    /// The signature of the trace, enabling trace integrity during replay.
+    ///
+    /// This is always at the start of any valid trace.
+    TraceSignature(common_events::TraceSignatureEvent),
+    /// A custom message in the trace, useful for diagnostics.
+    ///
+    /// Does not affect trace replay functionality
+    CustomMessage(common_events::CustomMessageEvent),
 
     // Common events for both core or component wasm
     // REQUIRED events
@@ -172,11 +189,11 @@ rr_event! {
 }
 
 impl RREvent {
-    /// Indicates whether current event is a marker event
+    /// Indicates whether current event is a diagnostic event
     #[inline]
-    pub fn is_marker(&self) -> bool {
+    pub fn is_diagnostic(&self) -> bool {
         match self {
-            Self::Nop(_) | Self::CustomMessage(_) => true,
+            Self::Nop | Self::CustomMessage(_) => true,
             _ => false,
         }
     }

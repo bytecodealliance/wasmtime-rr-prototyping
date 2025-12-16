@@ -4,6 +4,7 @@
 //! or [`core_events`]
 
 use super::*;
+use crate::RecordSettings;
 use serde::{Deserialize, Serialize};
 
 /// A call event from Wasm (core or component) into the host
@@ -39,4 +40,38 @@ impl Validate<&Result<RRFuncArgVals>> for WasmFuncReturnEvent {
 
 event_error_types! {
     pub struct WasmFuncReturnError(..)
+}
+
+/// Signature of recorded trace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceSignatureEvent {
+    /// Checksum of the trace contents.
+    ///
+    /// This can be used to verify integrity of the trace during replay.
+    pub checksum: String,
+    /// Settings used during trace recording.
+    pub settings: RecordSettings,
+}
+
+impl Validate<str> for TraceSignatureEvent {
+    fn validate(&self, expect: &str) -> Result<(), ReplayError> {
+        self.log();
+        if self.checksum == expect {
+            Ok(())
+        } else {
+            Err(ReplayError::FailedValidation)
+        }
+    }
+}
+
+/// A diagnostic event for custom String messages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomMessageEvent(pub String);
+impl<T> From<T> for CustomMessageEvent
+where
+    T: Into<String>,
+{
+    fn from(v: T) -> Self {
+        Self(v.into())
+    }
 }

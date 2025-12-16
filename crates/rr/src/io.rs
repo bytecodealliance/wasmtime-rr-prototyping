@@ -1,7 +1,7 @@
+use super::RREvent;
 use anyhow::Result;
 use core::any::Any;
 use postcard;
-use serde::{Deserialize, Serialize};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "std")] {
@@ -130,12 +130,12 @@ cfg_if::cfg_if! {
     }
 }
 
-/// Serialize and write `value` to a `RecordWriter`
+/// Serialize and write an `RREvent` to a `RecordWriter`
 ///
-/// Currently uses `postcard` serializer
-pub fn to_record_writer<T, W>(value: &T, writer: &mut W) -> Result<()>
+/// This is the lowest-level underlying writer function for RR events,
+/// helpful for implementing `Recorder`s. Currently uses [`postcard`] serializer.
+pub fn to_record_writer<W>(value: &RREvent, writer: &mut W) -> Result<()>
 where
-    T: Serialize + ?Sized,
     W: RecordWriter + ?Sized,
 {
     #[cfg(feature = "std")]
@@ -150,13 +150,12 @@ where
     Ok(())
 }
 
-/// Read and deserialize a `value` from a `ReplayReader`.
+/// Read and deserialize an `RREvent` from a `ReplayReader`.
 ///
-/// Currently uses `postcard` deserializer, with optional scratch
-/// buffer to deserialize into
-pub fn from_replay_reader<'a, T, R>(reader: &'a mut R, scratch: &'a mut [u8]) -> Result<T>
+/// This is the lowest-level underlying reader function for RR events,
+/// helpful for implementing `Replayer`s. Currently uses [`postcard`] deserializer.
+pub fn from_replay_reader<'a, R>(reader: &'a mut R, scratch: &'a mut [u8]) -> Result<RREvent>
 where
-    T: Deserialize<'a>,
     R: ReplayReader + ?Sized,
 {
     #[cfg(feature = "std")]
@@ -167,7 +166,7 @@ where
     {
         let flavor = ReplayReaderFlavor { reader, scratch };
         let mut deserializer = postcard::Deserializer::from_flavor(flavor);
-        let t = T::deserialize(&mut deserializer)?;
+        let t = serde::Deserialize::deserialize(&mut deserializer)?;
         deserializer.finalize()?;
         Ok(t)
     }

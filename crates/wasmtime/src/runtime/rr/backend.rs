@@ -138,15 +138,18 @@ impl RecordBuffer {
 }
 
 impl Recorder for RecordBuffer {
-    fn new_recorder(mut writer: impl RecordWriter, settings: RecordSettings) -> Result<Self> {
-        // Replay requires the Module version and record settings
-        to_record_writer(ModuleVersionStrategy::WasmtimeVersion.as_str(), &mut writer)?;
-        to_record_writer(&settings, &mut writer)?;
-        Ok(RecordBuffer {
+    fn new_recorder(writer: impl RecordWriter, settings: RecordSettings) -> Result<Self> {
+        let settings_local = settings.clone();
+        let mut buf = RecordBuffer {
             buf: Vec::new(),
             writer: Box::new(writer),
             settings,
-        })
+        };
+        buf.record_event(|| common_events::TraceSignatureEvent {
+            checksum: ModuleVersionStrategy::WasmtimeVersion.as_str().to_string(),
+            settings: settings_local,
+        })?;
+        Ok(buf)
     }
 
     #[inline]
@@ -211,7 +214,7 @@ impl Iterator for ReplayBuffer {
                     if let RREvent::Eof = &event {
                         self.eof_encountered = true;
                         break 'event_loop None;
-                    } else if event.is_marker() {
+                    } else if event.is_diagnostic() {
                         continue 'event_loop;
                     } else {
                         log::debug!("Read replay event => {event}");
@@ -245,38 +248,29 @@ impl Drop for ReplayBuffer {
 }
 
 impl Replayer for ReplayBuffer {
-    fn new_replayer(
-        mut reader: impl ReplayReader + 'static,
-        settings: ReplaySettings,
-    ) -> Result<Self> {
-        let mut scratch = [0u8; 12];
-        // Ensure module versions match
-        let version = from_replay_reader::<&str, _>(&mut reader, &mut scratch)?;
-        assert_eq!(
-            version,
-            ModuleVersionStrategy::WasmtimeVersion.as_str(),
-            "Wasmtime version mismatch between engine used for record and replay"
-        );
+    fn new_replayer(reader: impl ReplayReader + 'static, settings: ReplaySettings) -> Result<Self> {
+        let mut buf = ReplayBuffer {
+            reader: Box::new(reader),
+            deser_buffer: vec![0; settings.deserialize_buffer_size],
+            settings,
+            // This doesn't matter now; will override after reading header
+            trace_settings: RecordSettings::default(),
+            eof_encountered: false,
+        };
 
-        // Read the recording settings
-        let trace_settings: RecordSettings = from_replay_reader(&mut reader, &mut scratch)?;
+        let signature: common_events::TraceSignatureEvent = buf.next_event_typed()?;
+        // Ensure the trace integrity
+        signature.validate(ModuleVersionStrategy::WasmtimeVersion.as_str())?;
+        // Update the trace settings
+        buf.trace_settings = signature.settings;
 
-        if settings.validate && !trace_settings.add_validation {
+        if buf.settings.validate && !buf.trace_settings.add_validation {
             log::warn!(
                 "Replay validation will be omitted since the recorded trace has no validation metadata..."
             );
         }
 
-        let deser_buffer = vec![0; settings.deserialize_buffer_size];
-        let reader = Box::new(reader);
-
-        Ok(ReplayBuffer {
-            reader,
-            settings,
-            trace_settings,
-            deser_buffer,
-            eof_encountered: false,
-        })
+        Ok(buf)
     }
 
     #[inline]
