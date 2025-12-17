@@ -13,7 +13,11 @@ pub use events::{
 };
 use events::{component_events::RRComponentInstanceId, core_events::RRModuleInstanceId};
 pub use io::{RecordWriter, ReplayReader, from_replay_reader, to_record_writer};
-use wasmtime_environ::{EntityIndex, WasmChecksum};
+// Export necessary environ types for interactions with the crate
+pub use wasmtime_environ::{
+    EntityIndex, FuncIndex, WasmChecksum,
+    component::{ExportIndex, InterfaceType, ResourceDropRet},
+};
 
 /// Encapsulation of event types comprising an [`RREvent`] sum type
 mod events;

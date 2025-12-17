@@ -1,6 +1,6 @@
 //! Module comprising of core wasm events
 use super::*;
-use wasmtime_environ::{EntityIndex, FuncIndex, WasmChecksum};
+use crate::{EntityIndex, FuncIndex, WasmChecksum};
 
 /// Representation of a Wasm module instance identifier during record/replay.
 ///
