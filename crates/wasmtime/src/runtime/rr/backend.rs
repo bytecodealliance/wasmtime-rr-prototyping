@@ -301,8 +301,8 @@ mod tests {
     use std::fs::File;
     use std::path::Path;
     use tempfile::{NamedTempFile, TempPath};
+    use wasm_crimp::EventError;
     use wasmtime_environ::{FuncIndex, component::ResourceDropRet};
-    use wasmtime_rr::EventError;
 
     impl ReplayBuffer {
         /// Pop the next replay event and calls `f` with a expected event type
