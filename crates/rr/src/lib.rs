@@ -9,9 +9,10 @@ pub(crate) mod prelude {
 use crate::prelude::*;
 pub use core::fmt;
 pub use events::{
-    EventError, RRFuncArgVals, ResultEvent, Validate, common_events, component_events, core_events,
+    EventError, RRFuncArgVals, ResultEvent, Validate, common_events,
+    component_events::{self, RRComponentInstanceId},
+    core_events::{self, RRModuleInstanceId},
 };
-use events::{component_events::RRComponentInstanceId, core_events::RRModuleInstanceId};
 pub use io::{RecordWriter, ReplayReader, from_replay_reader, to_record_writer};
 // Export necessary environ types for interactions with the crate
 pub use wasmtime_environ::{
