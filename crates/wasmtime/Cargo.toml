@@ -31,7 +31,7 @@ wasmtime-slab = { workspace = true, optional = true }
 wasmtime-versioned-export-macros = { workspace = true }
 wasmtime-wmemcheck = { workspace = true, optional = true }
 wasmtime-math = { workspace = true }
-wasmtime-rr = { workspace = true, optional = true }
+wasm-crimp = { workspace = true, optional = true }
 pulley-interpreter = { workspace = true }
 target-lexicon = { workspace = true }
 wasmparser = { workspace = true }
@@ -347,7 +347,7 @@ std = [
   "dep:rustix",
   "wasmtime-jit-icache-coherence",
   "wasmtime-jit-debug?/std",
-  "wasmtime-rr?/std"
+  "wasm-crimp?/std"
 ]
 
 # Enables support for the `Store::call_hook` API which enables injecting custom
@@ -430,6 +430,6 @@ compile-time-builtins = ['dep:wasm-compose', 'dep:tempfile']
 
 # Enable support for the common base infrastructure of record/replay
 rr = [
-  "dep:wasmtime-rr",
+  "dep:wasm-crimp",
   "component-model"
 ]

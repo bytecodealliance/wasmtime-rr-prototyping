@@ -4332,6 +4332,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-crimp"
+version = "40.0.0"
+dependencies = [
+ "anyhow",
+ "cfg-if",
+ "log",
+ "postcard",
+ "serde",
+ "serde_derive",
+ "wasmtime-environ",
+]
+
+[[package]]
 name = "wasm-encoder"
 version = "0.241.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4519,6 +4532,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "wasm-compose",
+ "wasm-crimp",
  "wasm-encoder",
  "wasm-wave",
  "wasmparser 0.241.2",
@@ -4536,7 +4550,6 @@ dependencies = [
  "wasmtime-internal-versioned-export-macros",
  "wasmtime-internal-winch",
  "wasmtime-internal-wmemcheck",
- "wasmtime-rr",
  "wasmtime-test-util",
  "wat",
  "windows-sys 0.61.2",
@@ -4973,19 +4986,6 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-wmemcheck"
 version = "40.0.0"
-
-[[package]]
-name = "wasmtime-rr"
-version = "40.0.0"
-dependencies = [
- "anyhow",
- "cfg-if",
- "log",
- "postcard",
- "serde",
- "serde_derive",
- "wasmtime-environ",
-]
 
 [[package]]
 name = "wasmtime-test-macros"

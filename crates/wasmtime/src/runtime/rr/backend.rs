@@ -6,9 +6,9 @@ use crate::{AsContextMut, ModuleVersionStrategy, Val, ValRaw, ValType};
 use wasmtime_environ::component::FlatTypesStorage;
 
 // Public Re-exports
-pub use wasmtime_rr::{RecordSettings, RecordWriter, ReplayError, ReplayReader, ReplaySettings};
+pub use wasm_crimp::{RecordSettings, RecordWriter, ReplayError, ReplayReader, ReplaySettings};
 // Crate-internal re-exports
-pub(crate) use wasmtime_rr::{
+pub(crate) use wasm_crimp::{
     RREvent, RRFuncArgVals, Recorder, Replayer, ResultEvent, Validate, common_events,
     component_events::{self, RRComponentInstanceId},
     core_events::{self, RRModuleInstanceId},

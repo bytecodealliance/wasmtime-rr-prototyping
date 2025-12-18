@@ -272,7 +272,6 @@ wasmtime-slab = { path = "crates/slab", version = "=40.0.0", package = 'wasmtime
 wasmtime-jit-icache-coherence = { path = "crates/jit-icache-coherence", version = "=40.0.0", package = 'wasmtime-internal-jit-icache-coherence' }
 wasmtime-wit-bindgen = { path = "crates/wit-bindgen", version = "=40.0.0", package = 'wasmtime-internal-wit-bindgen' }
 wasmtime-math = { path = "crates/math", version = "=40.0.0", package = 'wasmtime-internal-math'  }
-wasmtime-rr = { path = "crates/rr", version = "40.0.0" }
 wasmtime-unwinder = { path = "crates/unwinder", version = "=40.0.0", package = 'wasmtime-internal-unwinder' }
 wasmtime-wizer = { path = "crates/wizer", version = "40.0.0" }
 
@@ -284,6 +283,7 @@ wiggle-generate = { path = "crates/wiggle/generate", version = "=40.0.0" }
 wasi-common = { path = "crates/wasi-common", version = "=40.0.0", default-features = false }
 pulley-interpreter = { path = 'pulley', version = "=40.0.0" }
 pulley-macros = { path = 'pulley/macros', version = "=40.0.0" }
+wasm-crimp = { path = "crates/wasm-crimp", version = "=40.0.0" }
 
 # Cranelift crates in this workspace
 cranelift-assembler-x64 = { path = "cranelift/assembler-x64", version = "0.127.0" }
