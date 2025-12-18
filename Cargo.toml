@@ -166,6 +166,7 @@ members = [
   "crates/wizer/tests/regex-test",
   "crates/wizer/benches/regex-bench",
   "crates/wizer/benches/uap-bench",
+  "crates/rr",
   "examples/fib-debug/wasm",
   "examples/wasm",
   "examples/tokio/wasm",
