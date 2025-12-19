@@ -5,11 +5,10 @@ use crate::store::InstanceId;
 use crate::{AsContextMut, ModuleVersionStrategy, Val, ValRaw, ValType};
 use wasmtime_environ::component::FlatTypesStorage;
 
-// Public Re-exports
-pub use wasm_crimp::{RecordSettings, RecordWriter, ReplayError, ReplayReader, ReplaySettings};
-// Crate-internal re-exports
-pub(crate) use wasm_crimp::{
-    RREvent, RRFuncArgVals, Recorder, Replayer, ResultEvent, Validate, common_events,
+mod crimp;
+pub use crimp::{
+    RREvent, RRFuncArgVals, RecordSettings, RecordWriter, Recorder, ReplayError, ReplayReader,
+    ReplaySettings, Replayer, ResultEvent, Validate, common_events,
     component_events::{self, RRComponentInstanceId},
     core_events::{self, RRModuleInstanceId},
     from_replay_reader, to_record_writer,
@@ -298,10 +297,10 @@ mod tests {
     use crate::ValRaw;
     use crate::WasmFuncOrigin;
     use crate::store::InstanceId;
+    use crimp::EventError;
     use std::fs::File;
     use std::path::Path;
     use tempfile::{NamedTempFile, TempPath};
-    use wasm_crimp::EventError;
     use wasmtime_environ::{FuncIndex, component::ResourceDropRet};
 
     impl ReplayBuffer {

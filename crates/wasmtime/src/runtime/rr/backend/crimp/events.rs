@@ -1,5 +1,7 @@
-use crate::{ReplayError, prelude::*};
+use super::ReplayError;
+use crate::prelude::*;
 use core::fmt;
+use serde::{Deserialize, Serialize};
 
 /// A serde compatible representation of errors produced during execution
 /// of certain events

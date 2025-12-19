@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::RecordSettings;
-use serde::{Deserialize, Serialize};
 
 /// A call event from Wasm (core or component) into the host
 ///

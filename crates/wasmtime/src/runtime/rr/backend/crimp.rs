@@ -1,24 +1,15 @@
-#![no_std]
-
-pub(crate) mod prelude {
-    pub use anyhow::{self, Result};
-    pub use serde::{Deserialize, Serialize};
-    pub use wasmtime_environ::prelude::*;
-}
+//! The CRIMP record-replay interface specification.
 
 use crate::prelude::*;
-pub use core::fmt;
+use core::fmt;
 pub use events::{
     EventError, RRFuncArgVals, ResultEvent, Validate, common_events,
     component_events::{self, RRComponentInstanceId},
     core_events::{self, RRModuleInstanceId},
 };
 pub use io::{RecordWriter, ReplayReader, from_replay_reader, to_record_writer};
-// Export necessary environ types for interactions with the crate
-pub use wasmtime_environ::{
-    EntityIndex, FuncIndex, WasmChecksum,
-    component::{ExportIndex, InterfaceType, ResourceDropRet},
-};
+use serde::{Deserialize, Serialize};
+use wasmtime_environ::{EntityIndex, WasmChecksum};
 
 /// Encapsulation of event types comprising an [`RREvent`] sum type
 mod events;
