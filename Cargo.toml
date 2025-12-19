@@ -283,7 +283,6 @@ wiggle-generate = { path = "crates/wiggle/generate", version = "=40.0.0" }
 wasi-common = { path = "crates/wasi-common", version = "=40.0.0", default-features = false }
 pulley-interpreter = { path = 'pulley', version = "=40.0.0" }
 pulley-macros = { path = 'pulley/macros', version = "=40.0.0" }
-wasm-crimp = { path = "crates/wasm-crimp", version = "=40.0.0" }
 
 # Cranelift crates in this workspace
 cranelift-assembler-x64 = { path = "cranelift/assembler-x64", version = "0.127.0" }

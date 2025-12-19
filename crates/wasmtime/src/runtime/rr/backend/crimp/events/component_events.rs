@@ -1,7 +1,8 @@
 //! Module comprising of component model wasm events
 
 use super::*;
-use crate::{ExportIndex, InterfaceType, ResourceDropRet, WasmChecksum};
+use wasmtime_environ::WasmChecksum;
+use wasmtime_environ::component::{ExportIndex, InterfaceType, ResourceDropRet};
 
 /// Representation of a component instance identifier during record/replay.
 ///
