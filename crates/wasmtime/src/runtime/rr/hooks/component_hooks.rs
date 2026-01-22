@@ -280,11 +280,14 @@ impl Drop for DynamicMemorySlice<'_> {
     fn drop(&mut self) {
         #[cfg(feature = "rr")]
         if let Some(buf) = &mut self.recorder {
-            buf.record_event(|| MemorySliceWriteEvent {
-                offset: self.offset,
-                bytes: self.bytes.to_vec(),
-            })
-            .unwrap();
+            // We don't need to record empty slices
+            if !self.bytes.is_empty() {
+                buf.record_event(|| MemorySliceWriteEvent {
+                    offset: self.offset,
+                    bytes: self.bytes.to_vec(),
+                })
+                .unwrap();
+            }
         }
     }
 }
@@ -340,11 +343,14 @@ impl<'a, const N: usize> Drop for FixedMemorySlice<'a, N> {
     fn drop(&mut self) {
         #[cfg(feature = "rr")]
         if let Some(buf) = &mut self.recorder {
-            buf.record_event(|| MemorySliceWriteEvent {
-                offset: self.offset,
-                bytes: self.bytes.to_vec(),
-            })
-            .unwrap();
+            // We don't need to record empty slices
+            if !self.bytes.is_empty() {
+                buf.record_event(|| MemorySliceWriteEvent {
+                    offset: self.offset,
+                    bytes: self.bytes.to_vec(),
+                })
+                .unwrap();
+            }
         }
     }
 }
