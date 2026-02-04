@@ -135,14 +135,15 @@ pub mod rr_impl {
                 add_validation: record
                     .validation_metadata
                     .unwrap_or(default_settings.add_validation),
-                event_window_size: record
-                    .event_window_size
-                    .unwrap_or(default_settings.event_window_size),
             };
             if path.trim().is_empty() {
                 store.record(io::sink(), settings)?;
             } else {
-                store.record(fs::File::create(&path)?, settings)?;
+                let file = io::BufWriter::with_capacity(
+                    record.buffer_size.unwrap_or(8 * 1024), // Default to 8 KiB buffer
+                    fs::File::create(&path)?,
+                );
+                store.record(file, settings)?;
             }
         }
         Ok(())

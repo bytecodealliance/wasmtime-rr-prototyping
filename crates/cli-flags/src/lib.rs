@@ -506,9 +506,8 @@ wasmtime_option_group! {
         /// Include (optional) signatures to facilitate validation checks during replay
         /// (see `wasmtime replay` for details).
         pub validation_metadata: Option<bool>,
-        /// Window size of internal buffering for record events (large windows offer more opportunities
-        /// for coalescing events at the cost of memory usage).
-        pub event_window_size: Option<usize>,
+        /// Writer buffer size (in bytes) for internal buffering during recording. Defaults to 8 KiB.
+        pub buffer_size: Option<usize>,
     }
 
     enum Record {

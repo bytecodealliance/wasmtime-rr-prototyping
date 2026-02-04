@@ -111,8 +111,6 @@ impl From<RRModuleInstanceId> for InstanceId {
 ///
 /// This type can be optimized for [`RREvent`] data configurations.
 pub struct RecordBuffer {
-    /// In-memory event buffer to enable windows for coalescing
-    buf: Vec<RREvent>,
     /// Writer to store data into
     writer: Box<dyn RecordWriter>,
     /// Settings in record configuration
@@ -122,10 +120,7 @@ pub struct RecordBuffer {
 impl RecordBuffer {
     /// Push a new record event [`RREvent`] to the buffer
     fn push_event(&mut self, event: RREvent) -> Result<()> {
-        self.buf.push(event);
-        if self.buf.len() >= self.settings().event_window_size {
-            self.flush()?;
-        }
+        to_record_writer(&event, &mut *self.writer)?;
         Ok(())
     }
 
@@ -141,7 +136,6 @@ impl Recorder for RecordBuffer {
     fn new_recorder(writer: impl RecordWriter, settings: RecordSettings) -> Result<Self> {
         let settings_local = settings.clone();
         let mut buf = RecordBuffer {
-            buf: Vec::new(),
             writer: Box::new(writer),
             settings,
         };
@@ -171,10 +165,8 @@ impl Recorder for RecordBuffer {
 
     fn flush(&mut self) -> Result<()> {
         log::debug!("Flushing record buffer...");
-        for e in self.buf.drain(..) {
-            to_record_writer(&e, &mut *self.writer)?;
-        }
-        return Ok(());
+        self.writer.flush()?;
+        Ok(())
     }
 
     #[inline]
@@ -274,19 +266,11 @@ impl Replayer for ReplayBuffer {
     }
 
     #[inline]
-    #[allow(
-        unused,
-        reason = "method only used for gated validation, but will be extended in the future"
-    )]
     fn settings(&self) -> &ReplaySettings {
         &self.settings
     }
 
     #[inline]
-    #[allow(
-        unused,
-        reason = "method only used for gated validation, but will be extended in the future"
-    )]
     fn trace_settings(&self) -> &RecordSettings {
         &self.trace_settings
     }
