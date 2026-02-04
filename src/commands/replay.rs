@@ -36,6 +36,10 @@ pub struct ReplayOptions {
     /// `validate` was enabled for recording.
     #[arg(short, long, default_value_t = 64)]
     pub deserialize_buffer_size: usize,
+
+    /// Size of the read buffer (in bytes) for internal buffering during replay.
+    #[arg(short, long, default_value_t = 8 * 1024)]
+    pub read_buffer_size: usize,
 }
 
 /// Execute a deterministic, embedding-agnostic replay of a Wasm modules given its associated recorded trace.
@@ -104,7 +108,7 @@ impl ReplayCommand {
 
         let allow_unknown_exports = self.run_cmd.run.common.wasm.unknown_exports_allow;
         let mut replay_instance = renv.instantiate_with(
-            io::BufReader::new(fs::File::open(opts.trace)?),
+            io::BufReader::with_capacity(opts.read_buffer_size, fs::File::open(opts.trace)?),
             |store| {
                 // If fuel has been configured, we want to add the configured
                 // fuel amount to this store.
