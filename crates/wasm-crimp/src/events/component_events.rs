@@ -21,6 +21,7 @@ pub struct WasmFuncBeginEvent {
 
 /// A instantiatation event for a Wasm component.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+#[serde(rename = "ComponentInstantiationEvent")]
 pub struct InstantiationEvent {
     /// Checksum of the bytecode used to instantiate the component
     pub component: WasmChecksum,
@@ -39,6 +40,7 @@ pub struct PostReturnEvent {
 
 /// A call event from Host into a Wasm component function.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename = "ComponentWasmFuncEntryEvent")]
 pub struct WasmFuncEntryEvent {
     /// Raw values passed across call boundary.
     pub args: RRFuncArgVals,
