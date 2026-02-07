@@ -35,6 +35,7 @@ impl From<FuncIndex> for RRModuleFuncIndex {
 
 /// A core Wasm module instantiatation event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd)]
+#[serde(rename = "CoreModuleInstantiationEvent")]
 pub struct InstantiationEvent {
     /// Checksum of the bytecode used to instantiate the module.
     pub module: WasmChecksum,
@@ -44,6 +45,7 @@ pub struct InstantiationEvent {
 
 /// A call event from Host into a core Wasm function.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename = "CoreWasmFuncEntryEvent")]
 pub struct WasmFuncEntryEvent {
     /// Instance ID for the instantiated module.
     pub instance: RRModuleInstanceId,

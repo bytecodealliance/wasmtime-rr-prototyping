@@ -98,7 +98,7 @@ where
 /// anyhow results are not serialized directly. They need to specifically check
 /// for divergence between recorded and replayed effects with [EventError]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResultEvent<T, E: EventError>(Result<T, E>);
+pub struct ResultEvent<T, E: EventError>(core::result::Result<T, E>);
 
 impl<T, E> ResultEvent<T, E>
 where
