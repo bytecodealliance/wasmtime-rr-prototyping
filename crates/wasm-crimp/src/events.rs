@@ -115,6 +115,19 @@ where
     }
 }
 
+impl<E> ResultEvent<u64, E>
+where
+    E: EventError,
+{
+    pub fn from_anyhow_result_usize(ret: &Result<usize>) -> Self {
+        Self(
+            ret.as_ref()
+                .map(|t| *t as u64)
+                .map_err(|e| E::new(e.to_string())),
+        )
+    }
+}
+
 impl<T, E> Validate<Result<T>> for ResultEvent<T, E>
 where
     T: fmt::Debug + PartialEq,

@@ -181,7 +181,10 @@ where
     #[cfg(feature = "rr")]
     cx.store
         .0
-        .record_event_validation(|| LowerMemoryEntryEvent { ty, offset })?;
+        .record_event_validation(|| LowerMemoryEntryEvent {
+            ty,
+            offset: offset as u64,
+        })?;
     let store_result = lower_store(cx, ty, offset);
     #[cfg(feature = "rr")]
     cx.store
@@ -283,7 +286,7 @@ impl Drop for DynamicMemorySlice<'_> {
             // We don't need to record empty slices
             if !self.bytes.is_empty() {
                 buf.record_event(|| MemorySliceWriteEvent {
-                    offset: self.offset,
+                    offset: self.offset as u64,
                     bytes: self.bytes.to_vec(),
                 })
                 .unwrap();
@@ -346,7 +349,7 @@ impl<'a, const N: usize> Drop for FixedMemorySlice<'a, N> {
             // We don't need to record empty slices
             if !self.bytes.is_empty() {
                 buf.record_event(|| MemorySliceWriteEvent {
-                    offset: self.offset,
+                    offset: self.offset as u64,
                     bytes: self.bytes.to_vec(),
                 })
                 .unwrap();

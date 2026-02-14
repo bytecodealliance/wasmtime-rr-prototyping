@@ -245,15 +245,15 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     ) -> Result<usize> {
         #[cfg(feature = "rr")]
         self.store.0.record_event(|| ReallocEntryEvent {
-            old_addr: old,
-            old_size,
+            old_addr: old as u64,
+            old_size: old_size as u64,
             old_align,
-            new_size,
+            new_size: new_size as u64,
         })?;
         let result = self.realloc_inner(old, old_size, old_align, new_size);
         #[cfg(feature = "rr")]
         self.store.0.record_event_validation(|| {
-            ReallocReturnEvent(ResultEvent::from_anyhow_result(&result))
+            ReallocReturnEvent(ResultEvent::from_anyhow_result_usize(&result))
         })?;
         result
     }
@@ -473,8 +473,12 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                     complete = true;
                 }
                 RREvent::ComponentReallocEntry(e) => {
-                    let result =
-                        self.realloc_inner(e.old_addr, e.old_size, e.old_align, e.new_size);
+                    let result = self.realloc_inner(
+                        e.old_addr as usize,
+                        e.old_size as usize,
+                        e.old_align,
+                        e.new_size as usize,
+                    );
                     if run_validate {
                         realloc_stack.push(result);
                     }
@@ -495,9 +499,10 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                     lowering_error = e.0.ret().map_err(Into::into).err();
                 }
                 RREvent::ComponentMemorySliceWrite(e) => {
+                    let offset = e.offset as usize;
                     // The bounds check is performed here is required here (in the absence of
                     // trace validation) to protect against malicious out-of-bounds slice writes
-                    self.as_slice_mut()[e.offset..e.offset + e.bytes.len()]
+                    self.as_slice_mut()[offset..offset + e.bytes.len()]
                         .copy_from_slice(e.bytes.as_slice());
                 }
                 // Optional events
@@ -510,7 +515,9 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                 // Unwrapping should never occur on valid executions since *Entry should be before *Return in trace
                 RREvent::ComponentReallocReturn(e) => {
                     if run_validate {
-                        lowering_error = e.0.validate(&realloc_stack.pop().unwrap()).err()
+                        lowering_error =
+                            e.0.validate(&realloc_stack.pop().unwrap().map(|r| r as u64))
+                                .err()
                     }
                 }
                 RREvent::ComponentLowerFlatEntry(_) => {
