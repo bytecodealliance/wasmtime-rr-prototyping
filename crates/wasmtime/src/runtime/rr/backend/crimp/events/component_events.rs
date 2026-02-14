@@ -50,10 +50,10 @@ pub struct WasmFuncEntryEvent {
 /// A reallocation call event in the Wasm Component Model canonical ABI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReallocEntryEvent {
-    pub old_addr: usize,
-    pub old_size: usize,
+    pub old_addr: u64,
+    pub old_size: u64,
     pub old_align: u32,
-    pub new_size: usize,
+    pub new_size: u64,
 }
 
 /// Entry to a type lowering invocation to flat destination.
@@ -66,7 +66,7 @@ pub struct LowerFlatEntryEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LowerMemoryEntryEvent {
     pub ty: InterfaceType,
-    pub offset: usize,
+    pub offset: u64,
 }
 
 /// A write to a mutable slice of Wasm linear memory by the host. This is the
@@ -78,7 +78,7 @@ pub struct LowerMemoryEntryEvent {
 /// larger granularity operations in the future at either the recording or the replay level.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemorySliceWriteEvent {
-    pub offset: usize,
+    pub offset: u64,
     pub bytes: Vec<u8>,
 }
 
@@ -92,7 +92,7 @@ event_error_types! {
 /// Return from a reallocation call in the Component Model canonical ABI, providing
 /// the address of allocation if successful.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReallocReturnEvent(pub ResultEvent<usize, ReallocError>);
+pub struct ReallocReturnEvent(pub ResultEvent<u64, ReallocError>);
 
 /// Return from type lowering to flat destination.
 #[derive(Debug, Clone, Serialize, Deserialize)]
