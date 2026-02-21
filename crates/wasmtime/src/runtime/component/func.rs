@@ -733,11 +733,6 @@ impl Func {
 
     fn post_return_impl(&self, mut store: impl AsContextMut) -> Result<()> {
         let mut store = store.as_context_mut();
-        component_hooks::record_wasm_func_post_return(
-            self.instance.id().instance(),
-            self.index,
-            &mut store,
-        )?;
 
         let index = self.index;
         let vminstance = self.instance.id().get(store.0);
@@ -791,6 +786,11 @@ impl Func {
             // intentionally leaves the instance in a "poisoned" state where it
             // can no longer be entered because `may_enter` is `false`.
             if let Some(func) = post_return {
+                component_hooks::record_wasm_func_post_return(
+                    self.instance.id().instance(),
+                    self.index,
+                    &mut store,
+                )?;
                 crate::Func::call_unchecked_raw(
                     &mut store,
                     func,
