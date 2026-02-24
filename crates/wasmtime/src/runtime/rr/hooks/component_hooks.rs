@@ -18,9 +18,11 @@ use alloc::sync::Arc;
 use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 use wasmtime_environ::WasmChecksum;
-use wasmtime_environ::component::{ComponentTypes, ExportIndex, InterfaceType, TypeFuncIndex};
 #[cfg(feature = "rr")]
-use wasmtime_environ::component::{MAX_FLAT_PARAMS, MAX_FLAT_RESULTS};
+use wasmtime_environ::component::FlatFuncTypeContext;
+use wasmtime_environ::component::{
+    ComponentTypes, ExportIndex, FlatTypesStorage, InterfaceType, TypeFuncIndex,
+};
 
 /// Indicator type signalling the context during lowering
 #[cfg(feature = "rr")]
@@ -78,28 +80,19 @@ pub fn record_and_replay_validate_wasm_func<F, T>(
 where
     F: FnOnce(&mut StoreContextMut<'_, T>) -> Result<()>,
 {
-    let _ = (args, type_idx, &types);
-    #[cfg(feature = "rr")]
-    store.0.record_event(|| {
-        let flat_params = types.flat_types_storage_or_pointer(
-            &InterfaceType::Tuple(types[type_idx].params),
-            MAX_FLAT_PARAMS,
-        );
-        WasmFuncEntryEvent {
-            args: RRFuncArgVals::from_flat_storage(args, flat_params),
-        }
-    })?;
-    let result = wasm_call(store);
     #[cfg(feature = "rr")]
     {
+        let func_ty = &types[type_idx];
+        let (flat_params, flat_results) = types.flat_func_type(&func_ty, FlatFuncTypeContext::Lift);
+        store.0.record_event(|| WasmFuncEntryEvent {
+            args: RRFuncArgVals::from_flat_storage(args, flat_params),
+        })?;
+        let result = wasm_call(store);
+
         if let Err(e) = &result {
             log::warn!("Wasm function call exited with error: {e:?}");
         }
-        let flat_results = types.flat_types_storage_or_pointer(
-            &InterfaceType::Tuple(types[type_idx].results),
-            MAX_FLAT_RESULTS,
-        );
-        let result = result.map(|_| RRFuncArgVals::from_flat_iter(args, flat_results.iter32()));
+        let result = result.map(|_| RRFuncArgVals::from_flat_storage(args, flat_results));
         store.0.record_event_validation(|| {
             WasmFuncReturnEvent(ResultEvent::from_anyhow_result(&result))
         })?;
@@ -113,7 +106,8 @@ where
     }
     #[cfg(not(feature = "rr"))]
     {
-        result
+        let _ = (args, type_idx, types);
+        wasm_call(store)
     }
 }
 
@@ -121,13 +115,15 @@ where
 #[inline]
 pub fn record_validate_host_func_entry(
     args: &mut [MaybeUninit<ValRaw>],
-    types: &Arc<ComponentTypes>,
-    param_tys: &InterfaceType,
+    flat_params: FlatTypesStorage,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr")]
-    store.record_event_validation(|| create_host_func_entry_event(args, types, param_tys))?;
-    let _ = (args, types, param_tys, store);
+    store.record_event_validation(|| HostFuncEntryEvent {
+        args: RRFuncArgVals::from_flat_storage(args, flat_params),
+    })?;
+    #[cfg(not(feature = "rr"))]
+    let _ = (args, flat_params, store);
     Ok(())
 }
 
@@ -136,15 +132,15 @@ pub fn record_validate_host_func_entry(
 #[cfg(feature = "rr")]
 pub fn replay_validate_host_func_entry(
     args: &mut [MaybeUninit<ValRaw>],
-    types: &Arc<ComponentTypes>,
-    param_tys: &InterfaceType,
+    flat_params: FlatTypesStorage,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr")]
-    store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| {
-        create_host_func_entry_event(args, types, param_tys)
+    store.next_replay_event_validation::<HostFuncEntryEvent, _, _>(|| HostFuncEntryEvent {
+        args: RRFuncArgVals::from_flat_storage(args, flat_params),
     })?;
-    let _ = (args, types, param_tys, store);
+    #[cfg(not(feature = "rr"))]
+    let _ = (args, flat_params, store);
     Ok(())
 }
 
@@ -152,18 +148,15 @@ pub fn replay_validate_host_func_entry(
 #[inline]
 pub fn record_host_func_return(
     args: &[MaybeUninit<ValRaw>],
-    types: &ComponentTypes,
-    ty: &InterfaceType,
+    flat_results: FlatTypesStorage,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr")]
-    store.record_event(|| {
-        let flat_results = types.flat_types_storage_or_pointer(&ty, MAX_FLAT_RESULTS);
-        HostFuncReturnEvent {
-            args: RRFuncArgVals::from_flat_storage(args, flat_results),
-        }
+    store.record_event(|| HostFuncReturnEvent {
+        args: RRFuncArgVals::from_flat_storage(args, flat_results),
     })?;
-    let _ = (args, types, ty, store);
+    #[cfg(not(feature = "rr"))]
+    let _ = (args, flat_results, store);
     Ok(())
 }
 
@@ -238,19 +231,6 @@ pub fn record_and_replay_validate_instantiation<T>(
     }
     let _ = (store, component, instance);
     Ok(())
-}
-
-#[cfg(feature = "rr")]
-#[inline(always)]
-fn create_host_func_entry_event(
-    args: &mut [MaybeUninit<ValRaw>],
-    types: &Arc<ComponentTypes>,
-    param_tys: &InterfaceType,
-) -> HostFuncEntryEvent {
-    let flat_params = types.flat_types_storage_or_pointer(param_tys, MAX_FLAT_PARAMS);
-    HostFuncEntryEvent {
-        args: RRFuncArgVals::from_flat_storage(args, flat_params),
-    }
 }
 
 /// Same as [`FixedMemorySlice`] except allows for dynamically sized slices.

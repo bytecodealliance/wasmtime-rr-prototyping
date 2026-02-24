@@ -372,36 +372,43 @@ impl ComponentTypes {
         }
     }
 
-    /// Returns the flat storage ABI representation for an interface type.
-    /// If the flat representation is larger than `limit` number of flat types, returns
-    /// storage with a pointer.
+    /// Returns the flat representation of a function's params and returns for
+    /// the underlying core wasm function according to the Canonical ABI
     ///
-    /// The intention of this method is to determine the flat ABI on host-to-wasm
-    /// transitions (return from hostcall, or entry into wasmcall). When the type is
-    /// not encodable in flat types, the values are all lowered to memory, implied by
-    /// the pointer storage.
-    pub fn flat_types_storage_or_pointer(
+    /// As per the Canonical ABI, when the representation is larger than MAX_FLAT_RESULTS
+    /// or MAX_FLAT_PARAMS, the core wasm function will take a pointer to the arg/result list.
+    /// Returns (param_iterator, result_iterator)
+    pub fn flat_func_type(
         &self,
-        ty: &InterfaceType,
-        limit: usize,
-    ) -> FlatTypesStorage {
-        assert!(
-            limit <= MAX_FLAT_TYPES,
-            "limit exceeding maximum flat types not allowed"
-        );
-        self.flat_types_storage_inner(ty, limit).unwrap_or_else(|| {
-            let mut flat = FlatTypesStorage::new();
-            // Pointer representation for wasm32 and wasm64 respectively
-            flat.push(FlatType::I32, FlatType::I64);
-            flat
-        })
+        ty: &TypeFunc,
+        context: FlatFuncTypeContext,
+    ) -> (FlatTypesStorage, FlatTypesStorage) {
+        let mut params_storage = self
+            .flat_interface_type(&InterfaceType::Tuple(ty.params), MAX_FLAT_PARAMS)
+            .unwrap_or_else(|| {
+                let mut flat = FlatTypesStorage::new();
+                flat.push(FlatType::I32, FlatType::I64);
+                flat
+            });
+        let results_storage = self
+            .flat_interface_type(&InterfaceType::Tuple(ty.results), MAX_FLAT_RESULTS)
+            .unwrap_or_else(|| {
+                let mut flat = FlatTypesStorage::new();
+                match context {
+                    FlatFuncTypeContext::Lift => {
+                        flat.push(FlatType::I32, FlatType::I64);
+                    }
+                    // For lowers, the retptr is passed as the last parameter
+                    FlatFuncTypeContext::Lower => {
+                        params_storage.push(FlatType::I32, FlatType::I64);
+                    }
+                }
+                flat
+            });
+        (params_storage, results_storage)
     }
 
-    fn flat_types_storage_inner(
-        &self,
-        ty: &InterfaceType,
-        limit: usize,
-    ) -> Option<FlatTypesStorage> {
+    fn flat_interface_type(&self, ty: &InterfaceType, limit: usize) -> Option<FlatTypesStorage> {
         // Helper routines
         let push = |storage: &mut FlatTypesStorage, t32: FlatType, t64: FlatType| -> bool {
             storage.push(t32, t64);
@@ -502,13 +509,14 @@ impl ComponentTypes {
                     && push(storage, FlatType::I32, FlatType::I64)
             }
 
-            InterfaceType::Record(i) => self[*i].fields.iter().all(|field| {
-                push_storage(storage, self.flat_types_storage_inner(&field.ty, limit))
-            }),
+            InterfaceType::Record(i) => self[*i]
+                .fields
+                .iter()
+                .all(|field| push_storage(storage, self.flat_interface_type(&field.ty, limit))),
             InterfaceType::Tuple(i) => self[*i]
                 .types
                 .iter()
-                .all(|field| push_storage(storage, self.flat_types_storage_inner(field, limit))),
+                .all(|field| push_storage(storage, self.flat_interface_type(field, limit))),
             InterfaceType::Flags(i) => match FlagsSize::from_count(self[*i].names.len()) {
                 FlagsSize::Size0 => true,
                 FlagsSize::Size1 | FlagsSize::Size2 => push(storage, FlatType::I32, FlatType::I32),
@@ -519,9 +527,7 @@ impl ComponentTypes {
             InterfaceType::Variant(i) => {
                 push_discrim(storage)
                     && self[*i].cases.values().all(|case| {
-                        let case_flat = case
-                            .as_ref()
-                            .map(|ty| self.flat_types_storage_inner(ty, limit));
+                        let case_flat = case.as_ref().map(|ty| self.flat_interface_type(ty, limit));
                         push_storage_variant_case(storage, case_flat)
                     })
             }
@@ -530,22 +536,18 @@ impl ComponentTypes {
                     && push_storage_variant_case(storage, None)
                     && push_storage_variant_case(
                         storage,
-                        Some(self.flat_types_storage_inner(&self[*i].ty, limit)),
+                        Some(self.flat_interface_type(&self[*i].ty, limit)),
                     )
             }
             InterfaceType::Result(i) => {
                 push_discrim(storage)
                     && push_storage_variant_case(
                         storage,
-                        self[*i]
-                            .ok
-                            .map(|ty| self.flat_types_storage_inner(&ty, limit)),
+                        self[*i].ok.map(|ty| self.flat_interface_type(&ty, limit)),
                     )
                     && push_storage_variant_case(
                         storage,
-                        self[*i]
-                            .err
-                            .map(|ty| self.flat_types_storage_inner(&ty, limit)),
+                        self[*i].err.map(|ty| self.flat_interface_type(&ty, limit)),
                     )
             }
         }
@@ -1393,7 +1395,6 @@ const fn max_flat(a: Option<u8>, b: Option<u8>) -> Option<u8> {
 /// that's 24 bytes. Otherwise `FlatType` is 1 byte large and
 /// `MAX_FLAT_TYPES` is 16, so it should ideally be more space-efficient to
 /// use a flat array instead of a heap-based vector.
-#[derive(Debug)]
 pub struct FlatTypesStorage {
     /// Representation for 32-bit memory
     pub memory32: [FlatType; MAX_FLAT_TYPES],
@@ -1513,4 +1514,15 @@ impl FlatType {
             FlatType::I64 | FlatType::F64 => 8,
         }
     }
+}
+
+/// Context under which the flat ABI is considered for functypes.
+///
+/// Note that this is necessary since the same signature can have different
+/// ABIs depending on whether it is a lifted function or a lowered function.
+pub enum FlatFuncTypeContext {
+    /// Flattening args for a lifted function
+    Lift,
+    /// Flattening args for a lowered function
+    Lower,
 }
