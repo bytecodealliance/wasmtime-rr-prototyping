@@ -21,8 +21,9 @@ use core::mem::{self, MaybeUninit};
 use core::pin::Pin;
 use core::ptr::NonNull;
 use wasmtime_environ::component::{
-    CanonicalAbiInfo, ComponentTypes, InterfaceType, MAX_FLAT_ASYNC_PARAMS, MAX_FLAT_PARAMS,
-    MAX_FLAT_RESULTS, OptionsIndex, RuntimeComponentInstanceIndex, TypeFuncIndex, TypeTuple,
+    CanonicalAbiInfo, ComponentTypes, FlatFuncTypeContext, FlatTypesStorage, InterfaceType,
+    MAX_FLAT_ASYNC_PARAMS, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS, OptionsIndex,
+    RuntimeComponentInstanceIndex, TypeFunc, TypeFuncIndex, TypeTuple,
 };
 
 pub struct HostFunc {
@@ -213,6 +214,27 @@ where
     Ok(())
 }
 
+#[cfg(feature = "rr")]
+#[inline(always)]
+fn flat_func_type(
+    types: &ComponentTypes,
+    ty: &TypeFunc,
+    context: FlatFuncTypeContext,
+) -> (FlatTypesStorage, FlatTypesStorage) {
+    types.flat_func_type(ty, context)
+}
+
+#[cfg(not(feature = "rr"))]
+#[inline(always)]
+/// This will get DCEd when RR is disabled
+fn flat_func_type(
+    _types: &ComponentTypes,
+    _ty: &TypeFunc,
+    _context: FlatFuncTypeContext,
+) -> (FlatTypesStorage, FlatTypesStorage) {
+    (FlatTypesStorage::new(), FlatTypesStorage::new())
+}
+
 /// The "meat" of calling a host function from wasm.
 ///
 /// This function is delegated to from implementations of
@@ -267,7 +289,10 @@ where
     let param_tys = InterfaceType::Tuple(ty.params);
     let result_tys = InterfaceType::Tuple(ty.results);
 
-    rr::component_hooks::record_validate_host_func_entry(storage, &types, &param_tys, store.0)?;
+    let (param_flat_types, result_flat_types) =
+        flat_func_type(types, &ty, FlatFuncTypeContext::Lower);
+
+    rr::component_hooks::record_validate_host_func_entry(storage, param_flat_types, store.0)?;
 
     if async_ {
         #[cfg(feature = "component-model-async")]
@@ -338,7 +363,7 @@ where
             };
 
             let mut lower = LowerContext::new(store, options, instance);
-            storage.lower_results(&mut lower, InterfaceType::U32, status)?;
+            storage.lower_results(&mut lower, InterfaceType::U32, result_flat_types, status)?;
         }
         #[cfg(not(feature = "component-model-async"))]
         {
@@ -366,7 +391,7 @@ where
             flags.set_may_leave(false);
         }
         let mut lower = LowerContext::new(store, options, instance);
-        storage.lower_results(&mut lower, result_tys, ret)?;
+        storage.lower_results(&mut lower, result_tys, result_flat_types, ret)?;
         unsafe {
             flags.set_may_leave(true);
         }
@@ -590,6 +615,7 @@ where
             &mut self,
             cx: &mut LowerContext<'_, T>,
             ty: InterfaceType,
+            result_flat_types: FlatTypesStorage,
             ret: R,
         ) -> Result<()> {
             match self.lower_dst() {
@@ -601,8 +627,7 @@ where
                     );
                     rr::component_hooks::record_host_func_return(
                         unsafe { storage_as_slice_mut(storage) },
-                        cx.types,
-                        &ty,
+                        result_flat_types,
                         cx.store.0,
                     )?;
                     result
@@ -615,11 +640,10 @@ where
                         ty,
                         offset,
                     );
-                    // Record the pointer
+                    // Pointer will be recorded by params; not necessary here
                     rr::component_hooks::record_host_func_return(
-                        &[MaybeUninit::new(*ptr)],
-                        cx.types,
-                        &InterfaceType::U32,
+                        &[],
+                        result_flat_types,
                         cx.store.0,
                     )?;
                     result
@@ -846,10 +870,12 @@ where
         params_and_results.push(Val::Bool(false));
     }
 
+    let (param_flat_types, result_flat_types) =
+        flat_func_type(types, func_ty, FlatFuncTypeContext::Lower);
+
     rr::component_hooks::record_validate_host_func_entry(
         storage,
-        types,
-        &InterfaceType::Tuple(func_ty.params),
+        param_flat_types,
         store.0.store_opaque_mut(),
     )?;
 
@@ -928,12 +954,7 @@ where
                 )?;
             }
             assert!(dst.next().is_none());
-            rr::component_hooks::record_host_func_return(
-                storage,
-                cx.types,
-                &InterfaceType::Tuple(func_ty.results),
-                cx.store.0,
-            )?;
+            rr::component_hooks::record_host_func_return(storage, result_flat_types, cx.store.0)?;
         } else {
             let ret_ptr = unsafe { storage[ret_index].assume_init_ref() };
             let mut ptr = validate_inbounds_dynamic(&result_tys.abi, cx.as_slice_mut(), ret_ptr)?;
@@ -946,13 +967,8 @@ where
                     offset,
                 )?;
             }
-            // Lower store into pointer
-            rr::component_hooks::record_host_func_return(
-                &storage[ret_index..ret_index + 1],
-                cx.types,
-                &InterfaceType::U32,
-                cx.store.0,
-            )?;
+            // Ret ptr is passed through params, and doesn't need to be recorded.
+            rr::component_hooks::record_host_func_return(&[], result_flat_types, cx.store.0)?;
         }
 
         unsafe {
@@ -977,14 +993,6 @@ unsafe fn call_host_dynamic_replay<T>(
     #[cfg(feature = "rr")]
     {
         use crate::rr::component_hooks::ReplayLoweringPhase;
-        // Mirror of `dynamic_params_load` for replay. Keep in sync
-        fn dynamic_params_load_replay(param_tys: &TypeTuple, max_flat_params: usize) -> usize {
-            if let Some(param_count) = param_tys.abi.flat_count(max_flat_params) {
-                param_count
-            } else {
-                1
-            }
-        }
 
         if async_ {
             unreachable!(
@@ -992,28 +1000,24 @@ unsafe fn call_host_dynamic_replay<T>(
             );
         }
         let func_ty = &types[ty];
-        let param_tys = &types[func_ty.params];
+        let (param_flat_types, _) = flat_func_type(types, func_ty, FlatFuncTypeContext::Lower);
         let result_tys = &types[func_ty.results];
 
         rr::component_hooks::replay_validate_host_func_entry(
             storage,
-            types,
-            &InterfaceType::Tuple(func_ty.params),
+            param_flat_types,
             store.0.store_opaque_mut(),
         )?;
 
         let mut cx = LowerContext::new(store, options, instance);
 
         // Skip lifting/lowering logic, and just replaying the lowering state
-        let ret_index = dynamic_params_load_replay(param_tys, MAX_FLAT_PARAMS);
-        // Copy the entire contiguous storage slice instead of looping
         if let Some(_cnt) = result_tys.abi.flat_count(MAX_FLAT_RESULTS) {
+            // Copy the entire contiguous storage slice instead of looping
             cx.replay_lowering(Some(storage), ReplayLoweringPhase::HostFuncReturn)?;
         } else {
-            cx.replay_lowering(
-                Some(&mut storage[ret_index..ret_index + 1]),
-                ReplayLoweringPhase::HostFuncReturn,
-            )?;
+            // The retptr is passed through params for lowering
+            cx.replay_lowering(None, ReplayLoweringPhase::HostFuncReturn)?;
         }
         Ok(())
     }
