@@ -21,7 +21,8 @@ use wasmtime_environ::WasmChecksum;
 #[cfg(feature = "rr")]
 use wasmtime_environ::component::FlatFuncTypeContext;
 use wasmtime_environ::component::{
-    ComponentTypes, ExportIndex, FlatTypesStorage, InterfaceType, TypeFuncIndex,
+    ComponentTypes, ExportIndex, FlatTypesStorage, InterfaceType, MAX_FLAT_PARAMS_ABI,
+    MAX_FLAT_RESULTS_ABI, TypeFuncIndex,
 };
 
 /// Indicator type signalling the context during lowering
@@ -115,7 +116,7 @@ where
 #[inline]
 pub fn record_validate_host_func_entry(
     args: &mut [MaybeUninit<ValRaw>],
-    flat_params: FlatTypesStorage,
+    flat_params: FlatTypesStorage<MAX_FLAT_PARAMS_ABI>,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr")]
@@ -132,7 +133,7 @@ pub fn record_validate_host_func_entry(
 #[cfg(feature = "rr")]
 pub fn replay_validate_host_func_entry(
     args: &mut [MaybeUninit<ValRaw>],
-    flat_params: FlatTypesStorage,
+    flat_params: FlatTypesStorage<MAX_FLAT_PARAMS_ABI>,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr")]
@@ -148,7 +149,7 @@ pub fn replay_validate_host_func_entry(
 #[inline]
 pub fn record_host_func_return(
     args: &[MaybeUninit<ValRaw>],
-    flat_results: FlatTypesStorage,
+    flat_results: FlatTypesStorage<MAX_FLAT_RESULTS_ABI>,
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr")]

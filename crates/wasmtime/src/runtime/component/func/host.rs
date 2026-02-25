@@ -22,8 +22,9 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use wasmtime_environ::component::{
     CanonicalAbiInfo, ComponentTypes, FlatFuncTypeContext, FlatTypesStorage, InterfaceType,
-    MAX_FLAT_ASYNC_PARAMS, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS, OptionsIndex,
-    RuntimeComponentInstanceIndex, TypeFunc, TypeFuncIndex, TypeTuple,
+    MAX_FLAT_ASYNC_PARAMS, MAX_FLAT_PARAMS, MAX_FLAT_PARAMS_ABI, MAX_FLAT_RESULTS,
+    MAX_FLAT_RESULTS_ABI, OptionsIndex, RuntimeComponentInstanceIndex, TypeFunc, TypeFuncIndex,
+    TypeTuple,
 };
 
 pub struct HostFunc {
@@ -220,7 +221,10 @@ fn flat_func_type(
     types: &ComponentTypes,
     ty: &TypeFunc,
     context: FlatFuncTypeContext,
-) -> (FlatTypesStorage, FlatTypesStorage) {
+) -> (
+    FlatTypesStorage<MAX_FLAT_PARAMS_ABI>,
+    FlatTypesStorage<MAX_FLAT_RESULTS_ABI>,
+) {
     types.flat_func_type(ty, context)
 }
 
@@ -231,7 +235,10 @@ fn flat_func_type(
     _types: &ComponentTypes,
     _ty: &TypeFunc,
     _context: FlatFuncTypeContext,
-) -> (FlatTypesStorage, FlatTypesStorage) {
+) -> (
+    FlatTypesStorage<MAX_FLAT_PARAMS_ABI>,
+    FlatTypesStorage<MAX_FLAT_RESULTS_ABI>,
+) {
     (FlatTypesStorage::new(), FlatTypesStorage::new())
 }
 
@@ -615,7 +622,7 @@ where
             &mut self,
             cx: &mut LowerContext<'_, T>,
             ty: InterfaceType,
-            result_flat_types: FlatTypesStorage,
+            result_flat_types: FlatTypesStorage<MAX_FLAT_RESULTS_ABI>,
             ret: R,
         ) -> Result<()> {
             match self.lower_dst() {
@@ -1012,7 +1019,7 @@ unsafe fn call_host_dynamic_replay<T>(
         let mut cx = LowerContext::new(store, options, instance);
 
         // Skip lifting/lowering logic, and just replaying the lowering state
-        if let Some(_cnt) = result_tys.abi.flat_count(MAX_FLAT_RESULTS) {
+        if let Some(_cnt) = result_tys.abi.flat_count(MAX_FLAT_RESULTS_ABI) {
             // Copy the entire contiguous storage slice instead of looping
             cx.replay_lowering(Some(storage), ReplayLoweringPhase::HostFuncReturn)?;
         } else {
