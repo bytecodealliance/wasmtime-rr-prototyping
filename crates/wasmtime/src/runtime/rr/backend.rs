@@ -22,7 +22,7 @@ pub trait RRFuncArgValsConvertable {
         T: FlatBytes;
 
     /// Construct [`RRFuncArgVals`] from raw value buffer and a [`FlatTypesStorage`]
-    fn from_flat_storage<T>(args: &[T], flat: FlatTypesStorage) -> RRFuncArgVals
+    fn from_flat_storage<T, const N: usize>(args: &[T], flat: FlatTypesStorage<N>) -> RRFuncArgVals
     where
         T: FlatBytes;
 
@@ -52,7 +52,7 @@ impl RRFuncArgValsConvertable for RRFuncArgVals {
 
     /// Construct [`RRFuncArgVals`] from raw value buffer and a [`FlatTypesStorage`]
     #[inline]
-    fn from_flat_storage<T>(args: &[T], flat: FlatTypesStorage) -> RRFuncArgVals
+    fn from_flat_storage<T, const N: usize>(args: &[T], flat: FlatTypesStorage<N>) -> RRFuncArgVals
     where
         T: FlatBytes,
     {

@@ -854,7 +854,7 @@ struct TypeInformationCache {
 
 struct TypeInformation {
     depth: u32,
-    flat: FlatTypesStorage,
+    flat: FlatTypesStorage<MAX_FLAT_TYPES>,
     has_borrow: bool,
 }
 
