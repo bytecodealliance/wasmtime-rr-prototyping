@@ -120,7 +120,9 @@ rr_event! {
     /// Nop Event
     Nop,
     /// Event signalling the end of a trace
-    Eof
+    Eof,
+    /// Specialized variant of `HostFuncReturnEvent` with empty args.
+    HostFuncReturnEmptyEvent
     ;
     /// The signature of the trace, enabling trace integrity during replay.
     ///

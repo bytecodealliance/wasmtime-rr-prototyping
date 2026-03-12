@@ -4,7 +4,8 @@ use crate::ValRaw;
 use crate::component::{ComponentInstanceId, func::LowerContext};
 #[cfg(feature = "rr")]
 use crate::rr::{
-    RRFuncArgVals, RRFuncArgValsConvertable, RecordBuffer, Recorder, ResultEvent, Validate,
+    RREvent, RRFuncArgVals, RRFuncArgValsConvertable, RecordBuffer, Recorder, ResultEvent,
+    Validate,
     common_events::{HostFuncEntryEvent, HostFuncReturnEvent, WasmFuncReturnEvent},
     component_events::{
         InstantiationEvent, LowerFlatEntryEvent, LowerFlatReturnEvent, LowerMemoryEntryEvent,
@@ -153,9 +154,13 @@ pub fn record_host_func_return(
     store: &mut StoreOpaque,
 ) -> Result<()> {
     #[cfg(feature = "rr")]
-    store.record_event(|| HostFuncReturnEvent {
-        args: RRFuncArgVals::from_flat_storage(args, flat_results),
-    })?;
+    if args.is_empty() {
+        store.record_event(|| RREvent::HostFuncReturnEmptyEvent)?;
+    } else {
+        store.record_event(|| HostFuncReturnEvent {
+            args: RRFuncArgVals::from_flat_storage(args, flat_results),
+        })?;
+    }
     #[cfg(not(feature = "rr"))]
     let _ = (args, flat_results, store);
     Ok(())
@@ -181,9 +186,9 @@ where
         })?;
     let store_result = lower_store(cx, ty, offset);
     #[cfg(feature = "rr")]
-    cx.store
-        .0
-        .record_event(|| LowerMemoryReturnEvent(ResultEvent::from_anyhow_result(&store_result)))?;
+    cx.store.0.record_event_validation(|| {
+        LowerMemoryReturnEvent(ResultEvent::from_anyhow_result(&store_result))
+    })?;
     store_result
 }
 
@@ -203,9 +208,9 @@ where
         .record_event_validation(|| LowerFlatEntryEvent { ty })?;
     let lower_result = lower(cx, ty);
     #[cfg(feature = "rr")]
-    cx.store
-        .0
-        .record_event(|| LowerFlatReturnEvent(ResultEvent::from_anyhow_result(&lower_result)))?;
+    cx.store.0.record_event_validation(|| {
+        LowerFlatReturnEvent(ResultEvent::from_anyhow_result(&lower_result))
+    })?;
     lower_result
 }
 
