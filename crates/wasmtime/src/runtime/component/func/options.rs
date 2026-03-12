@@ -450,11 +450,22 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                         _ => bail!("HostFuncReturn encountered in invalid phase"),
                     }
                     // End of the lowering process (for host calls)
-                    if let Some(e) = lowering_error {
-                        return Err(e.into());
+                    if let Some(err) = lowering_error {
+                        return Err(err.into());
                     }
                     if let Some(storage) = result_storage.as_deref_mut() {
                         e.args.into_raw_slice(storage);
+                    }
+                    complete = true;
+                }
+                RREvent::HostFuncReturnEmptyEvent => {
+                    match phase {
+                        ReplayLoweringPhase::HostFuncReturn => {}
+                        _ => bail!("HostFuncReturnEmpty encountered in invalid phase"),
+                    }
+                    // End of the lowering process (for host calls)
+                    if let Some(err) = lowering_error {
+                        return Err(err.into());
                     }
                     complete = true;
                 }
@@ -487,16 +498,16 @@ impl<'a, T: 'static> LowerContext<'a, T> {
                 RREvent::ComponentLowerFlatReturn(e) => {
                     if run_validate {
                         lower_stack.pop().ok_or(ReplayError::InvalidEventPosition)?;
+                        lowering_error = e.0.ret().map_err(Into::into).err();
                     }
-                    lowering_error = e.0.ret().map_err(Into::into).err();
                 }
                 RREvent::ComponentLowerMemoryReturn(e) => {
                     if run_validate {
                         lower_store_stack
                             .pop()
                             .ok_or(ReplayError::InvalidEventPosition)?;
+                        lowering_error = e.0.ret().map_err(Into::into).err();
                     }
-                    lowering_error = e.0.ret().map_err(Into::into).err();
                 }
                 RREvent::ComponentMemorySliceWrite(e) => {
                     let offset = e.offset as usize;
