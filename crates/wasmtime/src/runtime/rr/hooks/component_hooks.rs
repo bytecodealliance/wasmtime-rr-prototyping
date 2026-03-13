@@ -181,7 +181,6 @@ where
     cx.store
         .0
         .record_event_validation(|| LowerMemoryEntryEvent {
-            ty,
             offset: offset as u64,
         })?;
     let store_result = lower_store(cx, ty, offset);
@@ -203,9 +202,7 @@ where
     F: FnOnce(&mut LowerContext<'_, T>, InterfaceType) -> Result<()>,
 {
     #[cfg(feature = "rr")]
-    cx.store
-        .0
-        .record_event_validation(|| LowerFlatEntryEvent { ty })?;
+    cx.store.0.record_event_validation(|| LowerFlatEntryEvent)?;
     let lower_result = lower(cx, ty);
     #[cfg(feature = "rr")]
     cx.store.0.record_event_validation(|| {

@@ -171,10 +171,6 @@ rr_event! {
     ComponentInstantiation(component_events::InstantiationEvent),
     /// Component ABI realloc call in linear wasm memory
     ComponentReallocEntry(component_events::ReallocEntryEvent),
-    /// Return from a type lowering operation
-    ComponentLowerFlatReturn(component_events::LowerFlatReturnEvent),
-    /// Return from a store during a type lowering operation
-    ComponentLowerMemoryReturn(component_events::LowerMemoryReturnEvent),
     /// An attempt to obtain a mutable slice into Wasm linear memory
     ComponentMemorySliceWrite(component_events::MemorySliceWriteEvent),
     /// Return from a component builtin
@@ -194,6 +190,10 @@ rr_event! {
     ComponentLowerFlatEntry(component_events::LowerFlatEntryEvent),
     /// Call into type lowering for memory destination
     ComponentLowerMemoryEntry(component_events::LowerMemoryEntryEvent),
+    /// Return from a type lowering operation
+    ComponentLowerFlatReturn(component_events::LowerFlatReturnEvent),
+    /// Return from a store during a type lowering operation
+    ComponentLowerMemoryReturn(component_events::LowerMemoryReturnEvent),
     /// Call into a component builtin
     ComponentBuiltinEntry(component_events::BuiltinEntryEvent)
 }
