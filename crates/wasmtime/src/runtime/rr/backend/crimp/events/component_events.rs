@@ -58,14 +58,11 @@ pub struct ReallocEntryEvent {
 
 /// Entry to a type lowering invocation to flat destination.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LowerFlatEntryEvent {
-    pub ty: InterfaceType,
-}
+pub struct LowerFlatEntryEvent;
 
 /// Entry to type lowering invocation to destination in memory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LowerMemoryEntryEvent {
-    pub ty: InterfaceType,
     pub offset: u64,
 }
 
