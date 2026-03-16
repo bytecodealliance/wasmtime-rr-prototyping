@@ -508,6 +508,15 @@ wasmtime_option_group! {
         pub validation_metadata: Option<bool>,
         /// Writer buffer size (in bytes) for internal buffering during recording. Defaults to 8 KiB.
         pub buffer_size: Option<usize>,
+        /// Enable threaded (async) recording writer. Decouples serialization from file I/O
+        /// by shipping buffers to a background thread.
+        pub threaded: Option<bool>,
+        /// Buffer capacity (in bytes) for the threaded writer before shipping to the
+        /// background thread. Defaults to 64 KiB. Only used when `threaded` is enabled.
+        pub threaded_buffer_capacity: Option<usize>,
+        /// Channel bound for the threaded writer (max number of buffers queued).
+        /// Defaults to 8. Only used when `threaded` is enabled.
+        pub threaded_channel_bound: Option<usize>,
     }
 
     enum Record {

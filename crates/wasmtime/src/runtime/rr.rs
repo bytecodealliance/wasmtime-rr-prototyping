@@ -66,6 +66,12 @@ mod backend;
 #[cfg(feature = "rr")]
 pub use backend::*;
 
+/// Threaded writer for async file I/O during recording (requires `std` for threads and channels)
+#[cfg(all(feature = "rr", feature = "std"))]
+mod threaded_writer;
+#[cfg(all(feature = "rr", feature = "std"))]
+pub use threaded_writer::*;
+
 /// Driver capabilities for executing replays
 #[cfg(feature = "rr")]
 mod replay_driver;
