@@ -584,11 +584,8 @@ mod tests {
     #[test]
     fn lower_flat_events() -> Result<()> {
         use component_events::{LowerFlatEntryEvent, LowerFlatReturnEvent};
-        use wasmtime_environ::component::InterfaceType;
 
-        let entry = LowerFlatEntryEvent {
-            ty: InterfaceType::U32,
-        };
+        let entry = LowerFlatEntryEvent;
         let return_event = LowerFlatReturnEvent(ResultEvent::from_anyhow_result(&Ok(())));
 
         rr_harness(
@@ -598,10 +595,7 @@ mod tests {
                 Ok(())
             },
             |replayer| {
-                replayer.next_event_and(|e: LowerFlatEntryEvent| {
-                    assert_eq!(e.ty, InterfaceType::U32);
-                    Ok(())
-                })?;
+                replayer.next_event_and(|e: LowerFlatEntryEvent| Ok(()))?;
                 replayer.next_event_and(|e: LowerFlatReturnEvent| {
                     assert!(e.0.ret().is_ok());
                     Ok(())
@@ -614,12 +608,8 @@ mod tests {
     #[test]
     fn lower_memory_events() -> Result<()> {
         use component_events::{LowerMemoryEntryEvent, LowerMemoryReturnEvent};
-        use wasmtime_environ::component::InterfaceType;
 
-        let entry = LowerMemoryEntryEvent {
-            ty: InterfaceType::String,
-            offset: 1024,
-        };
+        let entry = LowerMemoryEntryEvent { offset: 1024 };
         let return_event = LowerMemoryReturnEvent(ResultEvent::from_anyhow_result(&Ok(())));
 
         rr_harness(
@@ -630,7 +620,6 @@ mod tests {
             },
             |replayer| {
                 replayer.next_event_and(|e: LowerMemoryEntryEvent| {
-                    assert_eq!(e.ty, InterfaceType::String);
                     assert_eq!(e.offset, 1024);
                     Ok(())
                 })?;

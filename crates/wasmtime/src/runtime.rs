@@ -95,6 +95,8 @@ pub use resources::*;
 pub use rr::{
     RecordSettings, RecordWriter, ReplayEnvironment, ReplayInstance, ReplayReader, ReplaySettings,
 };
+#[cfg(all(feature = "rr", feature = "std"))]
+pub use rr::{ThreadedWriter, ThreadedWriterConfig};
 #[cfg(all(feature = "async", feature = "call-hook"))]
 pub use store::CallHookHandler;
 pub use store::{

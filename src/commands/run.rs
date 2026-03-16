@@ -114,7 +114,7 @@ pub enum Replaying {
 pub mod rr_impl {
     use super::{Replaying, Result, Store};
     use std::{fs, io};
-    use wasmtime::{Config, RecordSettings};
+    use wasmtime::{Config, RecordSettings, ThreadedWriter, ThreadedWriterConfig};
     use wasmtime_cli_flags::RecordOptions;
 
     /// Setup replay configuration on the given [`Config`]
@@ -143,7 +143,18 @@ pub mod rr_impl {
                     record.buffer_size.unwrap_or(8 * 1024), // Default to 8 KiB buffer
                     fs::File::create(&path)?,
                 );
-                store.record(file, settings)?;
+                if record.threaded.unwrap_or(false) {
+                    let config = ThreadedWriterConfig {
+                        buffer_capacity: record
+                            .threaded_buffer_capacity
+                            .unwrap_or(64 * 1024),
+                        channel_bound: record.threaded_channel_bound.unwrap_or(8),
+                    };
+                    let writer = ThreadedWriter::new(Box::new(file), config);
+                    store.record(writer, settings)?;
+                } else {
+                    store.record(file, settings)?;
+                }
             }
         }
         Ok(())
