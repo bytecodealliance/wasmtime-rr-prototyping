@@ -67,20 +67,11 @@ impl SharedError {
 /// Configuration for [`ThreadedWriter`].
 pub struct ThreadedWriterConfig {
     /// Size (in bytes) of each local buffer before it is shipped to the
-    /// background thread. Defaults to 64 KiB.
+    /// background thread.
     pub buffer_capacity: usize,
     /// Maximum number of buffers that can be queued in the channel before the
     /// foreground blocks. Defaults to 8.
-    pub channel_bound: usize,
-}
-
-impl Default for ThreadedWriterConfig {
-    fn default() -> Self {
-        Self {
-            buffer_capacity: 64 * 1024,
-            channel_bound: 8,
-        }
-    }
+    pub channels: usize,
 }
 
 /// A writer that buffers serialized bytes in memory and ships them to a
@@ -117,7 +108,7 @@ impl ThreadedWriter {
     /// Spawns a background thread named `"rr-record-writer"` that receives
     /// buffers over a bounded channel and writes them to `writer`.
     pub fn new(writer: Box<dyn RecordWriter>, config: ThreadedWriterConfig) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<WriterMsg>(config.channel_bound);
+        let (tx, rx) = mpsc::sync_channel::<WriterMsg>(config.channels);
         let (recycle_tx, recycle_rx) = mpsc::channel::<Vec<u8>>();
         let shared_error = SharedError::new();
         let bg_error = Arc::clone(&shared_error);
@@ -265,7 +256,7 @@ mod tests {
         let writer = SharedVecWriter(Arc::clone(&shared));
         let config = ThreadedWriterConfig {
             buffer_capacity: 32,
-            channel_bound: 4,
+            channels: 4,
         };
         let mut tw = ThreadedWriter::new(Box::new(writer), config);
 
@@ -283,11 +274,11 @@ mod tests {
         let writer = SharedVecWriter(Arc::clone(&shared));
         let config = ThreadedWriterConfig {
             buffer_capacity: 64,
-            channel_bound: 2,
+            channels: 2,
         };
         let mut tw = ThreadedWriter::new(Box::new(writer), config);
 
-        // Write more data than buffer_capacity * channel_bound
+        // Write more data than buffer_capacity * channels
         let data: Vec<u8> = (0..1024).map(|i| (i % 256) as u8).collect();
         tw.write_all(&data).unwrap();
         tw.flush().unwrap();
@@ -319,7 +310,7 @@ mod tests {
         let writer = FailingWriter { remaining: 16 };
         let config = ThreadedWriterConfig {
             buffer_capacity: 32,
-            channel_bound: 2,
+            channels: 2,
         };
         let mut tw = ThreadedWriter::new(Box::new(writer), config);
 
@@ -341,7 +332,10 @@ mod tests {
     fn empty_write() {
         let shared = Arc::new(Mutex::new(Vec::new()));
         let writer = SharedVecWriter(Arc::clone(&shared));
-        let config = ThreadedWriterConfig::default();
+        let config = ThreadedWriterConfig {
+            buffer_capacity: 64,
+            channels: 4,
+        };
         let mut tw = ThreadedWriter::new(Box::new(writer), config);
 
         tw.flush().unwrap();
