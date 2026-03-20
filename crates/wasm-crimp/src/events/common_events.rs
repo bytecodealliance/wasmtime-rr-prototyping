@@ -64,6 +64,20 @@ impl Validate<str> for TraceSignatureEvent {
     }
 }
 
+/// A memory.grow return event
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MemoryGrowEvent {
+    /// Result of the grow
+    pub result: u32,
+}
+
+/// A table.grow return event
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TableGrowEvent {
+    /// Result of the grow
+    pub result: u32,
+}
+
 /// A diagnostic event for custom String messages.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomMessageEvent(pub String);
