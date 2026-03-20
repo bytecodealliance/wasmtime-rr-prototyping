@@ -140,16 +140,19 @@ pub mod rr_impl {
                 store.record(io::sink(), settings)?;
             } else {
                 let buffer_capacity = record.buffer_size.unwrap_or(8 * 1024); // Default to 8 KiB buffer
-                let file = io::BufWriter::with_capacity(buffer_capacity, fs::File::create(&path)?);
+                let file = fs::File::create(&path)?;
                 if record.threaded.unwrap_or(false) {
-                    let config = ThreadedWriterConfig {
-                        buffer_capacity,
-                        channels: record.channels.unwrap_or(8),
-                    };
-                    let writer = ThreadedWriter::new(Box::new(file), config);
+                    let writer = ThreadedWriter::new(
+                        Box::new(file),
+                        ThreadedWriterConfig {
+                            buffer_capacity,
+                            channels: record.channels.unwrap_or(8),
+                        },
+                    );
                     store.record(writer, settings)?;
                 } else {
-                    store.record(file, settings)?;
+                    let writer = io::BufWriter::with_capacity(buffer_capacity, file);
+                    store.record(writer, settings)?;
                 }
             }
         }
