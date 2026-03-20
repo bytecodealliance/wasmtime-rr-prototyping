@@ -137,6 +137,10 @@ rr_event! {
     // REQUIRED events
     /// Return from host function (core or component) to host
     HostFuncReturn(common_events::HostFuncReturnEvent),
+    /// Return value of a memory.grow instruction
+    MemoryGrow(common_events::MemoryGrowEvent),
+    /// Return value of a table.grow instruction
+    TableGrow(common_events::TableGrowEvent),
     // OPTIONAL events
     /// Call into host function from Wasm (core or component)
     HostFuncEntry(common_events::HostFuncEntryEvent),

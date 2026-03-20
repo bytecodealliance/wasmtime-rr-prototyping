@@ -4,7 +4,7 @@ use crate::rr::FlatBytes;
 #[cfg(feature = "rr")]
 use crate::rr::{
     RREvent, RRFuncArgVals, RRFuncArgValsConvertable, ReplayError, Replayer, ResultEvent, Validate,
-    common_events::{HostFuncEntryEvent, HostFuncReturnEvent, WasmFuncReturnEvent},
+    common_events::{HostFuncEntryEvent, HostFuncReturnEvent, MemoryGrowEvent, TableGrowEvent, WasmFuncReturnEvent},
     core_events::{InstantiationEvent, WasmFuncEntryEvent},
 };
 use crate::store::{InstanceId, StoreOpaque};
@@ -212,6 +212,40 @@ pub fn record_and_replay_validate_instantiation<T: 'static>(
         }
     }
     let _ = (store, module, instance);
+    Ok(())
+}
+
+/// Record and replay hook for memory.grow return value
+#[inline]
+pub fn record_and_replay_validate_memory_grow(
+    result: u32,
+    store: &mut StoreOpaque,
+) -> Result<()> {
+    let _ = (result, &store);
+    #[cfg(feature = "rr")]
+    {
+        store.record_event(|| MemoryGrowEvent { result })?;
+        store.next_replay_event_validation::<MemoryGrowEvent, _, _>(|| MemoryGrowEvent {
+            result,
+        })?;
+    }
+    Ok(())
+}
+
+/// Record and replay hook for table.grow return value
+#[inline]
+pub fn record_and_replay_validate_table_grow(
+    result: u32,
+    store: &mut StoreOpaque,
+) -> Result<()> {
+    let _ = (result, &store);
+    #[cfg(feature = "rr")]
+    {
+        store.record_event(|| TableGrowEvent { result })?;
+        store.next_replay_event_validation::<TableGrowEvent, _, _>(|| TableGrowEvent {
+            result,
+        })?;
+    }
     Ok(())
 }
 
