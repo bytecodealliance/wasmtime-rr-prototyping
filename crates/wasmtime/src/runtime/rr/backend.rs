@@ -594,7 +594,7 @@ mod tests {
                 Ok(())
             },
             |replayer| {
-                replayer.next_event_and(|e: LowerFlatEntryEvent| Ok(()))?;
+                replayer.next_event_and(|_e: LowerFlatEntryEvent| Ok(()))?;
                 replayer.next_event_and(|e: LowerFlatReturnEvent| {
                     assert!(e.0.ret().is_ok());
                     Ok(())

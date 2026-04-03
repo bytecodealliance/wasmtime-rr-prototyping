@@ -233,7 +233,7 @@ fn memory_grow(
         // Record/replay hook for memory.grow
         rr::core_hooks::record_and_replay_validate_memory_grow(
             match &result {
-                Some(a) => a.0 as u32,
+                Some(a) => u32::try_from(a.0)?,
                 None => u32::MAX,
             },
             store,
@@ -309,7 +309,7 @@ unsafe fn table_grow_func_ref(
         // Record/replay hook for table.grow
         rr::core_hooks::record_and_replay_validate_table_grow(
             match &result {
-                Some(a) => a.0 as u32,
+                Some(a) => u32::try_from(a.0)?,
                 None => u32::MAX,
             },
             store,
@@ -352,7 +352,7 @@ fn table_grow_gc_ref(
         // Record/replay hook for table.grow
         rr::core_hooks::record_and_replay_validate_table_grow(
             match &result {
-                Some(a) => a.0 as u32,
+                Some(a) => u32::try_from(a.0)?,
                 None => u32::MAX,
             },
             store,
@@ -394,7 +394,7 @@ unsafe fn table_grow_cont_obj(
         // Record/replay hook for table.grow
         rr::core_hooks::record_and_replay_validate_table_grow(
             match &result {
-                Some(a) => a.0 as u32,
+                Some(a) => u32::try_from(a.0)?,
                 None => u32::MAX,
             },
             store,
