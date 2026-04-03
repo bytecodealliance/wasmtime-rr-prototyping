@@ -34,7 +34,7 @@ use wasmtime_environ::{HostPtr, PrimaryMap, VMSharedTypeIndex};
 const INVALID_PTR: usize = 0xdead_dead_beef_beef_u64 as usize;
 
 mod handle_table;
-mod libcalls;
+pub(crate) mod libcalls;
 mod resources;
 
 pub use self::handle_table::{HandleTable, RemovedResource};

@@ -105,14 +105,14 @@
 mod component;
 #[cfg(feature = "component-model-async")]
 pub(crate) mod concurrent;
-mod func;
+pub(crate) mod func;
 mod has_data;
 mod instance;
 mod linker;
 mod matching;
 mod resource_table;
 mod resources;
-mod storage;
+pub(crate) mod storage;
 pub(crate) mod store;
 pub mod types;
 mod values;

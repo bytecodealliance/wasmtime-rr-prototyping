@@ -425,3 +425,6 @@ debug = [
 
 # Enables support for defining compile-time builtins.
 compile-time-builtins = ['dep:wasm-compose', 'dep:tempfile']
+
+# Enable support for the common base infrastructure of record/replay
+rr = ["component-model"]

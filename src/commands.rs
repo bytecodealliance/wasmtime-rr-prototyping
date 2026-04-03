@@ -44,3 +44,8 @@ pub use self::objdump::*;
 mod wizer;
 #[cfg(feature = "wizer")]
 pub use self::wizer::*;
+
+#[cfg(feature = "rr")]
+mod replay;
+#[cfg(feature = "rr")]
+pub use self::replay::*;

@@ -83,12 +83,15 @@ wasmtime_environ::foreach_builtin_component_function!(define_builtins);
 /// implementation following this submodule.
 mod trampolines {
     use super::{ComponentInstance, VMComponentContext};
+    #[cfg(feature = "rr")]
+    use crate::rr::{Replayer, ResultEvent, component_events::*};
     use core::ptr::NonNull;
 
     macro_rules! shims {
         (
             $(
                 $( #[cfg($attr:meta)] )?
+                $( #[rr_builtin( variant = $rr_var:ident, entry = $rr_entry:ident $(, exit = $rr_return:ident)? $(, success_ty = $rr_succ:tt)? )] )?
                 $name:ident( vmctx: vmctx $(, $pname:ident: $param:ident )* ) $( -> $result:ident )?;
             )*
         ) => (
@@ -104,7 +107,7 @@ mod trampolines {
 
                         let ret = unsafe {
                             ComponentInstance::enter_host_from_wasm(vmctx, |store, instance| {
-                                shims!(@invoke $name(store, instance,) $($pname)*)
+                                shims!(@invoke $([$rr_entry $(, $rr_return)?])? $name(store, instance,) $($pname)*)
                             })
                         };
                         shims!(@convert_ret ret $($pname: $param)*)
@@ -155,6 +158,52 @@ mod trampolines {
         (@invoke $m:ident ($($args:tt)*) $param:ident $($rest:tt)*) => (
             shims!(@invoke $m ($($args)* $param,) $($rest)*)
         );
+
+        // main invoke rule with a record/replay hook wrapper around the above invoke rules
+        // when `rr_builtin`` is provided
+        (@invoke [$rr_entry:ident, $rr_exit:ident] $name:ident($store:ident, $instance:ident,) $($pname:ident)*) => ({
+            #[cfg(not(feature = "rr"))]
+            {
+                shims!(@invoke $name($store, $instance,) $($pname)*)
+            }
+            #[cfg(feature = "rr")]
+            {
+                if let Some(buf) = (*$store).replay_buffer_mut() {
+                    buf.next_event_validation::<BuiltinEntryEvent, _>(&$rr_entry{ $($pname),* }.into())?;
+                    // Replay the return value
+                    let builtin_ret_event = buf.next_event_typed::<BuiltinReturnEvent>()?;
+                    $rr_exit::try_from(builtin_ret_event)?.ret()
+                } else {
+                    // Recording entry/return
+                    (*$store).record_event_validation::<BuiltinEntryEvent, _>(|| $rr_entry{ $($pname),* }.into())?;
+                    let retval = shims!(@invoke $name($store, $instance,) $($pname)*);
+                    (*$store).record_event::<BuiltinReturnEvent, _>(|| $rr_exit(ResultEvent::from_anyhow_result(&retval)).into())?;
+                    retval
+                }
+            }
+        });
+
+        // same as above rule for builtins *without* a return value
+        (@invoke [$rr_entry:ident] $name:ident($store:ident, $instance:ident,) $($pname:ident)*) => ({
+            #[cfg(not(feature = "rr"))]
+            {
+                shims!(@invoke $name($store, $instance,) $($pname)*)
+            }
+            #[cfg(feature = "rr")]
+            {
+                if let Some(_buf) = (*$store).replay_buffer_mut() {
+                    // Just perform replay validation, if required
+                    _buf.next_event_validation::<BuiltinEntryEvent, _>(&$rr_entry{ $($pname),* }.into()).unwrap();
+                } else {
+                    // Record entry only; return is not present
+                    (*$store).record_event_validation::<BuiltinEntryEvent, _>(|| $rr_entry{ $($pname),* }.into()).unwrap();
+                    shims!(@invoke $name($store, $instance,) $($pname)*)
+                }
+            }
+        });
+
+
+
     }
 
     wasmtime_environ::foreach_builtin_component_function!(shims);
@@ -619,8 +668,6 @@ fn resource_drop(
         idx,
     )?))
 }
-
-struct ResourceDropRet(Option<u32>);
 
 unsafe impl HostResultHasUnwindSentinel for ResourceDropRet {
     type Abi = u64;

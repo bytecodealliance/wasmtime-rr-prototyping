@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::rr::{self, RRWasmFuncType};
 use crate::runtime::Uninhabited;
 use crate::runtime::vm::{
     self, InterpreterRef, SendSyncPtr, StoreBox, VMArrayCallHostFuncContext,
@@ -17,7 +18,10 @@ use core::ffi::c_void;
 use core::future::Future;
 use core::mem::{self, MaybeUninit};
 use core::ptr::NonNull;
-use wasmtime_environ::VMSharedTypeIndex;
+use serde::{Deserialize, Serialize};
+use wasmtime_environ::{
+    FuncIndex, VMSharedTypeIndex, packed_option::PackedOption, packed_option::ReservedValue,
+};
 
 /// A reference to the abstract `nofunc` heap value.
 ///
@@ -99,6 +103,32 @@ impl NoFunc {
     #[inline]
     pub fn null_val() -> Val {
         Val::FuncRef(None)
+    }
+}
+
+/// Metadata for the origin of a WebAssembly [`Func`]
+///
+/// This type captures minimally enough state about a [`Func`] that
+/// needs to be recorded on host-to-Wasm invocations so that the
+/// it can be reconstructed for replay.
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct WasmFuncOrigin {
+    /// The instance from which the embedded function belongs to.
+    pub instance: InstanceId,
+    /// The function index within the module.
+    pub index: FuncIndex,
+}
+
+impl ReservedValue for WasmFuncOrigin {
+    fn reserved_value() -> Self {
+        WasmFuncOrigin {
+            instance: InstanceId::reserved_value(),
+            index: FuncIndex::reserved_value(),
+        }
+    }
+
+    fn is_reserved_value(&self) -> bool {
+        self.instance.is_reserved_value() && self.index.is_reserved_value()
     }
 }
 
@@ -278,13 +308,20 @@ pub struct Func {
     /// an ambiently provided `StoreOpaque` or similar. Use the
     /// `self.func_ref()` method instead of this field to perform this check.
     unsafe_func_ref: SendSyncPtr<VMFuncRef>,
+
+    /// Optional metadata about the origin of this function.
+    ///
+    /// This field is populated when a [`Func`] is generated from a known instance
+    /// (i.e. exported Wasm functions), and is usually `None` for internal
+    /// Wasm functions and host functions.
+    origin: PackedOption<WasmFuncOrigin>,
 }
 
 // Double-check that the C representation in `extern.h` matches our in-Rust
 // representation here in terms of size/alignment/etc.
 const _: () = {
     #[repr(C)]
-    struct C(u64, *mut u8);
+    struct C(u64, *mut u8, (u32, u32));
     assert!(core::mem::size_of::<C>() == core::mem::size_of::<Func>());
     assert!(core::mem::align_of::<C>() == core::mem::align_of::<Func>());
     assert!(core::mem::offset_of!(Func, store) == 0);
@@ -549,6 +586,7 @@ impl Func {
         Func {
             store,
             unsafe_func_ref: func_ref.into(),
+            origin: PackedOption::default(),
         }
     }
 
@@ -1009,12 +1047,67 @@ impl Func {
         let func_ref = self.vm_func_ref(store.0);
         let params_and_returns = NonNull::new(params_and_returns).unwrap_or(NonNull::from(&mut []));
 
-        // SAFETY: the safety of this function call is the same as the contract
-        // of this function.
-        unsafe { Self::call_unchecked_raw(&mut store, func_ref, params_and_returns) }
+        unsafe {
+            let ty = &self.ty(&store);
+            let origin = self.origin.expand();
+            Self::call_unchecked_raw(
+                &mut store,
+                func_ref,
+                params_and_returns,
+                RRWasmFuncType::Core { ty, origin },
+            )
+        }
     }
 
+    /// Raw, unchecked call to the underlying func_ref.
+    ///
+    /// This method contains record/replay hooks for either component or core wasm source that
+    /// invoked it based on `rr`. `RRWasmFuncType::None` can be used to disable record/replay for the call
     pub(crate) unsafe fn call_unchecked_raw<T>(
+        mut store: &mut StoreContextMut<'_, T>,
+        func_ref: NonNull<VMFuncRef>,
+        params_and_returns: NonNull<[ValRaw]>,
+        rr: RRWasmFuncType,
+    ) -> Result<()> {
+        // SAFETY: the safety of this function call is the same as the contract
+        // of this function.
+        match rr {
+            RRWasmFuncType::Core { ty, origin } => {
+                rr::core_hooks::record_and_replay_validate_wasm_func(
+                    |mut store| {
+                        // SAFETY: the safety of this function call is the same as the contract
+                        // of this function.
+                        unsafe {
+                            Self::call_unchecked_raw_inner(&mut store, func_ref, params_and_returns)
+                        }
+                    },
+                    unsafe { params_and_returns.as_ref() },
+                    ty,
+                    origin,
+                    &mut store,
+                )
+            }
+            #[cfg(feature = "component-model")]
+            RRWasmFuncType::Component { type_idx, types } => {
+                rr::component_hooks::record_and_replay_validate_wasm_func(
+                    |mut store| unsafe {
+                        Self::call_unchecked_raw_inner(&mut store, func_ref, params_and_returns)
+                    },
+                    unsafe { params_and_returns.as_ref() },
+                    type_idx,
+                    types,
+                    &mut store,
+                )
+            }
+            // Passthrough
+            #[cfg(feature = "component-model")]
+            RRWasmFuncType::None => unsafe {
+                Self::call_unchecked_raw_inner(&mut store, func_ref, params_and_returns)
+            },
+        }
+    }
+
+    unsafe fn call_unchecked_raw_inner<T>(
         store: &mut StoreContextMut<'_, T>,
         func_ref: NonNull<VMFuncRef>,
         params_and_returns: NonNull<[ValRaw]>,
@@ -1124,7 +1217,7 @@ impl Func {
     /// of arguments as well as making sure everything is from the same `Store`.
     ///
     /// This must be called just before `call_impl_do_call`.
-    fn call_impl_check_args<T>(
+    pub(crate) fn call_impl_check_args<T>(
         &self,
         store: &mut StoreContextMut<'_, T>,
         params: &[Val],
@@ -1164,7 +1257,7 @@ impl Func {
     /// You must have type checked the arguments by calling
     /// `call_impl_check_args` immediately before calling this function. It is
     /// only safe to call this function if that one did not return an error.
-    unsafe fn call_impl_do_call<T>(
+    pub(crate) unsafe fn call_impl_do_call<T>(
         &self,
         store: &mut StoreContextMut<'_, T>,
         params: &[Val],
@@ -1260,22 +1353,54 @@ impl Func {
         debug_assert!(val_vec.is_empty());
         let nparams = ty.params().len();
         val_vec.reserve(nparams + ty.results().len());
-        for (i, ty) in ty.params().enumerate() {
-            val_vec.push(unsafe { Val::from_raw(&mut caller.store, values_vec[i], ty) })
-        }
 
-        val_vec.extend((0..ty.results().len()).map(|_| Val::null_func_ref()));
-        let (params, results) = val_vec.split_at_mut(nparams);
-        func(caller.sub_caller(), params, results)?;
+        let mut run_impl = |caller: &mut Caller<'_, T>, values_vec: &mut [ValRaw]| -> Result<()> {
+            let flat_params = ty.params().map(|x| x.to_wasm_type().byte_size());
+            rr::core_hooks::record_validate_host_func_entry(
+                values_vec,
+                flat_params,
+                &mut caller.store.0,
+            )?;
+            for (i, ty) in ty.params().enumerate() {
+                val_vec.push(unsafe { Val::from_raw(&mut caller.store, values_vec[i], ty) })
+            }
 
-        // Unlike our arguments we need to dynamically check that the return
-        // values produced are correct. There could be a bug in `func` that
-        // produces the wrong number, wrong types, or wrong stores of
-        // values, and we need to catch that here.
-        for (i, (ret, ty)) in results.iter().zip(ty.results()).enumerate() {
-            ret.ensure_matches_ty(caller.store.0, &ty)
-                .context("function attempted to return an incompatible value")?;
-            values_vec[i] = ret.to_raw(&mut caller.store)?;
+            val_vec.extend((0..ty.results().len()).map(|_| Val::null_func_ref()));
+            let (params, results) = val_vec.split_at_mut(nparams);
+            func(caller.sub_caller(), params, results)?;
+
+            // Unlike our arguments we need to dynamically check that the return
+            // values produced are correct. There could be a bug in `func` that
+            // produces the wrong number, wrong types, or wrong stores of
+            // values, and we need to catch that here.
+            for (i, (ret, ty)) in results.iter().zip(ty.results()).enumerate() {
+                ret.ensure_matches_ty(caller.store.0, &ty)
+                    .context("function attempted to return an incompatible value")?;
+                values_vec[i] = ret.to_raw(&mut caller.store)?;
+            }
+
+            let flat_results = ty.results().map(|x| x.to_wasm_type().byte_size());
+            rr::core_hooks::record_host_func_return(values_vec, flat_results, &mut caller.store.0)?;
+            Ok(())
+        };
+
+        let replay_impl = |caller: &mut Caller<'_, T>, values_vec: &mut [ValRaw]| -> Result<()> {
+            let flat_params = ty.params().map(|x| x.to_wasm_type().byte_size());
+            rr::core_hooks::replay_validate_host_func_entry(
+                values_vec,
+                flat_params,
+                &mut caller.store.0,
+            )?;
+            rr::core_hooks::replay_host_func_return(values_vec, caller)?;
+            Ok(())
+        };
+
+        if caller.store.0.replay_enabled() {
+            // In replay mode, we skip execution of host functions and
+            // just replay the return value effects observed in the trace
+            replay_impl(&mut caller, values_vec)?;
+        } else {
+            run_impl(&mut caller, values_vec)?;
         }
 
         // Restore our `val_vec` back into the store so it's usable for the next
@@ -1480,6 +1605,16 @@ impl Func {
     )]
     pub(crate) fn hash_key(&self, store: &mut StoreOpaque) -> impl core::hash::Hash + Eq + use<> {
         self.vm_func_ref(store).as_ptr().addr()
+    }
+
+    /// Set the origin of this function.
+    pub(crate) fn set_origin(&mut self, origin: WasmFuncOrigin) {
+        self.origin = PackedOption::from(origin);
+    }
+
+    // Get the origin of this function
+    pub(crate) fn origin(&self) -> Option<WasmFuncOrigin> {
+        self.origin.expand()
     }
 }
 
@@ -2326,9 +2461,8 @@ impl HostContext {
         // Note that this function is intentionally scoped into a
         // separate closure to fit everything inside `enter_host_from_wasm`
         // below.
-        let run = move |mut caller: Caller<'_, T>| {
-            let mut args =
-                NonNull::slice_from_raw_parts(args.cast::<MaybeUninit<ValRaw>>(), args_len);
+        let run = move |caller: Caller<'_, T>| {
+            let args = NonNull::slice_from_raw_parts(args.cast::<MaybeUninit<ValRaw>>(), args_len);
             // SAFETY: it's a safety contract of this function itself that
             // `callee_vmctx` is safe to read.
             let state = unsafe {
@@ -2349,44 +2483,41 @@ impl HostContext {
             };
             let func = &state.func;
 
-            let ret = 'ret: {
-                if let Err(trap) = caller.store.0.call_hook(CallHook::CallingHost) {
-                    break 'ret R::fallible_from_error(trap);
-                }
+            let type_index = state._ty.index();
+            let wasm_func_subtype = caller.engine().signatures().borrow(type_index).unwrap();
+            let wasm_func_type = wasm_func_subtype.unwrap_func();
+            let (num_params, flat_size_params) = (
+                wasm_func_type.params().len(),
+                wasm_func_type.params().into_iter().map(|x| x.byte_size()),
+            );
+            let (num_results, flat_size_results) = (
+                wasm_func_type.returns().len(),
+                wasm_func_type.returns().into_iter().map(|x| x.byte_size()),
+            );
 
-                let mut store = if P::may_gc() {
-                    AutoAssertNoGc::new(caller.store.0)
+            unsafe {
+                // This top-level switch determines whether or not we're in replay mode or
+                // not. In replay mode, we skip execution of host functions and
+                // just replay the return value effects observed in the trace
+                if caller.store.0.replay_enabled() {
+                    Self::array_call_trampoline_replay(
+                        caller,
+                        args,
+                        num_params,
+                        flat_size_params,
+                        num_results,
+                    )
                 } else {
-                    unsafe { AutoAssertNoGc::disabled(caller.store.0) }
-                };
-                // SAFETY: this function requires `args` to be valid and the
-                // `WasmTyList` trait means that everything should be correctly
-                // ascribed/typed, making this valid to load from.
-                let params = unsafe { P::load(&mut store, args.as_mut()) };
-                let _ = &mut store;
-                drop(store);
-
-                let r = func(caller.sub_caller(), params);
-
-                if let Err(trap) = caller.store.0.call_hook(CallHook::ReturningFromHost) {
-                    break 'ret R::fallible_from_error(trap);
+                    Self::array_call_trampoline_impl(
+                        caller,
+                        args,
+                        func,
+                        num_params,
+                        flat_size_params,
+                        num_results,
+                        flat_size_results,
+                    )
                 }
-                r.into_fallible()
-            };
-
-            if !ret.compatible_with_store(caller.store.0) {
-                bail!("host function attempted to return cross-`Store` value to Wasm")
-            } else {
-                let mut store = if R::may_gc() {
-                    AutoAssertNoGc::new(caller.store.0)
-                } else {
-                    unsafe { AutoAssertNoGc::disabled(caller.store.0) }
-                };
-                // SAFETY: this function requires that `args` is safe for this
-                // type signature, and the guarantees of `WasmRet` means that
-                // everything should be typed appropriately.
-                let ret = unsafe { ret.store(&mut store, args.as_mut())? };
-                Ok(ret)
             }
         };
 
@@ -2402,6 +2533,96 @@ impl HostContext {
                 Caller::with(store, instance, run)
             })
         }
+    }
+
+    unsafe fn array_call_trampoline_replay<T>(
+        mut caller: Caller<'_, T>,
+        mut args: NonNull<[MaybeUninit<ValRaw>]>,
+        num_params: usize,
+        flat_size_params: impl Iterator<Item = u8>,
+        num_results: usize,
+    ) -> Result<()>
+    where
+        T: 'static,
+    {
+        rr::core_hooks::replay_validate_host_func_entry(
+            unsafe { &args.as_ref()[..num_params] },
+            flat_size_params,
+            caller.store.0,
+        )?;
+        rr::core_hooks::replay_host_func_return(
+            unsafe { &mut args.as_mut()[..num_results] },
+            &mut caller,
+        )?;
+        Ok(())
+    }
+
+    unsafe fn array_call_trampoline_impl<T, F, P, R>(
+        mut caller: Caller<'_, T>,
+        mut args: NonNull<[MaybeUninit<ValRaw>]>,
+        func: &F,
+        num_params: usize,
+        flat_size_params: impl Iterator<Item = u8>,
+        num_results: usize,
+        flat_size_results: impl Iterator<Item = u8>,
+    ) -> Result<()>
+    where
+        F: Fn(Caller<'_, T>, P) -> R + 'static,
+        P: WasmTyList,
+        R: WasmRet,
+        T: 'static,
+    {
+        // Don't need auto-assert GC store here since we aren't using P, just raw args for recording
+        rr::core_hooks::record_validate_host_func_entry(
+            unsafe { &args.as_ref()[..num_params] },
+            flat_size_params,
+            caller.store.0,
+        )?;
+
+        let ret = 'ret: {
+            if let Err(trap) = caller.store.0.call_hook(CallHook::CallingHost) {
+                break 'ret R::fallible_from_error(trap);
+            }
+
+            let mut store = if P::may_gc() {
+                AutoAssertNoGc::new(caller.store.0)
+            } else {
+                unsafe { AutoAssertNoGc::disabled(caller.store.0) }
+            };
+            // SAFETY: this function requires `args` to be valid and the
+            // `WasmTyList` trait means that everything should be correctly
+            // ascribed/typed, making this valid to load from.
+            let params = unsafe { P::load(&mut store, args.as_mut()) };
+            let _ = &mut store;
+            drop(store);
+
+            let r = func(caller.sub_caller(), params);
+            if let Err(trap) = caller.store.0.call_hook(CallHook::ReturningFromHost) {
+                break 'ret R::fallible_from_error(trap);
+            }
+            r.into_fallible()
+        };
+
+        if !ret.compatible_with_store(caller.store.0) {
+            bail!("host function attempted to return cross-`Store` value to Wasm")
+        } else {
+            let mut store = if R::may_gc() {
+                AutoAssertNoGc::new(caller.store.0)
+            } else {
+                unsafe { AutoAssertNoGc::disabled(caller.store.0) }
+            };
+            // SAFETY: this function requires that `args` is safe for this
+            // type signature, and the guarantees of `WasmRet` means that
+            // everything should be typed appropriately.
+            unsafe { ret.store(&mut store, args.as_mut())? };
+        }
+        // Record the return values
+        rr::core_hooks::record_host_func_return(
+            unsafe { &args.as_ref()[..num_results] },
+            flat_size_results,
+            caller.store.0,
+        )?;
+        Ok(())
     }
 }
 

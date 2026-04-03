@@ -1,10 +1,11 @@
 use super::invoke_wasm_and_catch_traps;
 use crate::prelude::*;
+use crate::rr;
 use crate::runtime::vm::VMFuncRef;
 use crate::store::{AutoAssertNoGc, StoreOpaque};
 use crate::{
     AsContext, AsContextMut, Engine, Func, FuncType, HeapType, NoFunc, RefType, StoreContextMut,
-    ValRaw, ValType,
+    ValRaw, ValType, WasmFuncOrigin,
 };
 use core::ffi::c_void;
 use core::marker;
@@ -102,7 +103,7 @@ where
         );
 
         let func = self.func.vm_func_ref(store.0);
-        unsafe { Self::call_raw(&mut store, &self.ty, func, params) }
+        unsafe { Self::call_raw(&mut store, &self.ty, func, params, self.func.origin()) }
     }
 
     /// Invokes this WebAssembly function with the specified parameters.
@@ -141,22 +142,24 @@ where
         store
             .on_fiber(|store| {
                 let func = self.func.vm_func_ref(store.0);
-                unsafe { Self::call_raw(store, &self.ty, func, params) }
+                unsafe { Self::call_raw(store, &self.ty, func, params, self.func().origin()) }
             })
             .await?
     }
 
-    /// Do a raw call of a typed function.
+    /// Do a raw call of a typed function, with optional recording/replaying of events.
     ///
     /// # Safety
     ///
     /// `func` must be of the given type, and it additionally must be a valid
     /// store-owned pointer within the `store` provided.
+    /// If providing `rr_origin`, it must exactly match the origin information of `func`
     pub(crate) unsafe fn call_raw<T>(
         store: &mut StoreContextMut<'_, T>,
         ty: &FuncType,
         func: ptr::NonNull<VMFuncRef>,
         params: Params,
+        rr_origin: Option<WasmFuncOrigin>,
     ) -> Result<Results> {
         // double-check that params/results match for this function's type in
         // debug mode.
@@ -191,29 +194,41 @@ where
             params.store(&mut store, ty, dst)?;
         }
 
+        let storage_len = mem::size_of_val::<Storage<_, _>>(&storage) / mem::size_of::<ValRaw>();
+        let storage_slice: *mut Storage<_, _> = &mut storage;
+        let storage_slice = storage_slice.cast::<ValRaw>();
+        let storage_slice = core::ptr::slice_from_raw_parts_mut(storage_slice, storage_len);
+        let storage_slice = NonNull::new(storage_slice).unwrap();
+
         // Try to capture only a single variable (a tuple) in the closure below.
         // This means the size of the closure is one pointer and is much more
         // efficient to move in memory. This closure is actually invoked on the
         // other side of a C++ shim, so it can never be inlined enough to make
         // the memory go away, so the size matters here for performance.
-        let mut captures = (func, storage);
+        let captures = (func, storage_slice);
 
-        let result = invoke_wasm_and_catch_traps(store, |caller, vm| {
-            let (func_ref, storage) = &mut captures;
-            let storage_len = mem::size_of_val::<Storage<_, _>>(storage) / mem::size_of::<ValRaw>();
-            let storage: *mut Storage<_, _> = storage;
-            let storage = storage.cast::<ValRaw>();
-            let storage = core::ptr::slice_from_raw_parts_mut(storage, storage_len);
-            let storage = NonNull::new(storage).unwrap();
+        let args_and_results = unsafe { storage_slice.as_ref() };
+        // For component mode, Realloc uses this method `TypedFunc::call_raw`, but Realloc is its
+        // own separate event for record/replay purposes. For now, we use the should_record flag to
+        // distinguish but this could be removed in the future by folding it into the main function call event.
+        //
+        // Note: This can't use [`crate::Func::call_unchecked_raw_with_rr`] directly because of the closure capture
+        rr::core_hooks::record_and_replay_validate_wasm_func(
+            |store| {
+                invoke_wasm_and_catch_traps(store, |caller, vm| {
+                    let (func_ref, storage) = &captures;
 
-            // SAFETY: this function's own contract is that `func_ref` is safe
-            // to call and additionally that the params/results are correctly
-            // ascribed for this function call to be safe.
-            unsafe { VMFuncRef::array_call(*func_ref, vm, caller, storage) }
-        });
-
-        let (_, storage) = captures;
-        result?;
+                    // SAFETY: this function's own contract is that `func_ref` is safe
+                    // to call and additionally that the params/results are correctly
+                    // ascribed for this function call to be safe.
+                    unsafe { VMFuncRef::array_call(*func_ref, vm, caller, *storage) }
+                })
+            },
+            args_and_results,
+            ty,
+            rr_origin,
+            store,
+        )?;
 
         let mut store = AutoAssertNoGc::new(store.0);
         // SAFETY: this function is itself unsafe to ensure that the result type

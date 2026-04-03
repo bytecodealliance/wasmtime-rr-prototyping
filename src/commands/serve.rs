@@ -1,3 +1,4 @@
+use crate::commands::rr_impl;
 use crate::common::{Profile, RunCommon, RunTarget};
 use anyhow::{Context as _, Result, bail};
 use bytes::Bytes;
@@ -309,6 +310,8 @@ impl ServeCommand {
         if let Some(fuel) = self.run.common.wasm.fuel {
             store.set_fuel(fuel)?;
         }
+
+        rr_impl::recording_for_store(&mut store, &self.run.common.record)?;
 
         Ok(store)
     }

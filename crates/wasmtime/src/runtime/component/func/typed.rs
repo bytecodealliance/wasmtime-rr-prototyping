@@ -3,6 +3,7 @@ use crate::component::func::{Func, LiftContext, LowerContext};
 use crate::component::matching::InstanceType;
 use crate::component::storage::{storage_as_slice, storage_as_slice_mut};
 use crate::prelude::*;
+use crate::rr::component_hooks;
 use crate::{AsContextMut, StoreContext, StoreContextMut, ValRaw};
 use alloc::borrow::Cow;
 use core::fmt;
@@ -472,8 +473,11 @@ where
         dst: &mut MaybeUninit<Params::Lower>,
     ) -> Result<()> {
         assert!(Params::flatten_count() <= MAX_FLAT_PARAMS);
-        params.linear_lower_to_flat(cx, ty, dst)?;
-        Ok(())
+        component_hooks::record_lower_flat(
+            |cx, ty| params.linear_lower_to_flat(cx, ty, dst),
+            cx,
+            ty,
+        )
     }
 
     /// Lower parameters onto a heap-allocated location.
@@ -496,7 +500,12 @@ where
         // Note that `realloc` will bake in a check that the returned pointer is
         // in-bounds.
         let ptr = cx.realloc(0, 0, Params::ALIGN32, Params::SIZE32)?;
-        params.linear_lower_to_memory(cx, ty, ptr)?;
+        component_hooks::record_lower_memory(
+            |cx, ty, ptr| params.linear_lower_to_memory(cx, ty, ptr),
+            cx,
+            ty,
+            ptr,
+        )?;
 
         // Note that the pointer here is stored as a 64-bit integer. This allows
         // this to work with either 32 or 64-bit memories. For a 32-bit memory
@@ -1107,7 +1116,7 @@ macro_rules! integers {
                 // `align_to_mut` which is not safe in general but is safe in
                 // our specific case as all `u8` patterns are valid `Self`
                 // patterns since `Self` is an integral type.
-                let dst = &mut cx.as_slice_mut()[offset..][..items.len() * Self::SIZE32];
+                let mut dst = cx.get_dyn(offset, items.len() * Self::SIZE32);
                 let (before, middle, end) = unsafe { dst.align_to_mut::<Self>() };
                 assert!(before.is_empty() && end.is_empty());
                 assert_eq!(middle.len(), items.len());
@@ -1207,7 +1216,7 @@ macro_rules! floats {
             ) -> Result<()> {
                 debug_assert!(matches!(ty, InterfaceType::$ty));
                 debug_assert!(offset % Self::SIZE32 == 0);
-                let ptr = cx.get(offset);
+                let mut ptr = cx.get(offset);
                 *ptr = self.to_bits().to_le_bytes();
                 Ok(())
             }
@@ -1229,7 +1238,7 @@ macro_rules! floats {
                 // This should all have already been verified in terms of
                 // alignment and sizing meaning that these assertions here are
                 // not truly necessary but are instead double-checks.
-                let dst = &mut cx.as_slice_mut()[offset..][..items.len() * Self::SIZE32];
+                let mut dst = cx.get_dyn(offset, items.len() * Self::SIZE32);
                 assert!(dst.as_ptr().cast::<Self>().is_aligned());
 
                 // And with all that out of the way perform the copying loop.
@@ -1499,7 +1508,8 @@ fn lower_string<T>(cx: &mut LowerContext<'_, T>, string: &str) -> Result<(usize,
                 );
             }
             let ptr = cx.realloc(0, 0, 1, string.len())?;
-            cx.as_slice_mut()[ptr..][..string.len()].copy_from_slice(string.as_bytes());
+            cx.get_dyn(ptr, string.len())
+                .copy_from_slice(string.as_bytes());
             Ok((ptr, string.len()))
         }
 
@@ -1516,13 +1526,14 @@ fn lower_string<T>(cx: &mut LowerContext<'_, T>, string: &str) -> Result<(usize,
             }
             let mut ptr = cx.realloc(0, 0, 2, size)?;
             let mut copied = 0;
-            let bytes = &mut cx.as_slice_mut()[ptr..][..size];
+            let mut bytes = cx.get_dyn(ptr, size);
             for (u, bytes) in string.encode_utf16().zip(bytes.chunks_mut(2)) {
                 let u_bytes = u.to_le_bytes();
                 bytes[0] = u_bytes[0];
                 bytes[1] = u_bytes[1];
                 copied += 1;
             }
+            drop(bytes);
             if (copied * 2) < size {
                 ptr = cx.realloc(ptr, size, 2, copied * 2)?;
             }
@@ -1534,7 +1545,7 @@ fn lower_string<T>(cx: &mut LowerContext<'_, T>, string: &str) -> Result<(usize,
             let bytes = string.as_bytes();
             let mut iter = string.char_indices();
             let mut ptr = cx.realloc(0, 0, 2, bytes.len())?;
-            let mut dst = &mut cx.as_slice_mut()[ptr..][..bytes.len()];
+            let mut dst = cx.get_dyn(ptr, bytes.len());
             let mut result = 0;
             while let Some((i, ch)) = iter.next() {
                 // Test if this `char` fits into the latin1 encoding.
@@ -1553,8 +1564,9 @@ fn lower_string<T>(cx: &mut LowerContext<'_, T>, string: &str) -> Result<(usize,
                 if worst_case > MAX_STRING_BYTE_LENGTH {
                     bail!("byte length too large");
                 }
+                drop(dst);
                 ptr = cx.realloc(ptr, bytes.len(), 2, worst_case)?;
-                dst = &mut cx.as_slice_mut()[ptr..][..worst_case];
+                dst = cx.get_dyn(ptr, worst_case);
 
                 // Previously encoded latin1 bytes are inflated to their 16-bit
                 // size for utf16
@@ -1573,11 +1585,13 @@ fn lower_string<T>(cx: &mut LowerContext<'_, T>, string: &str) -> Result<(usize,
                     bytes[1] = u_bytes[1];
                     result += 1;
                 }
+                drop(dst);
                 if worst_case > 2 * result {
                     ptr = cx.realloc(ptr, worst_case, 2, 2 * result)?;
                 }
                 return Ok((ptr, result | UTF16_TAG));
             }
+            drop(dst);
             if result < bytes.len() {
                 ptr = cx.realloc(ptr, bytes.len(), 2, result)?;
             }

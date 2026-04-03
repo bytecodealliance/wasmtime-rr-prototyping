@@ -3,6 +3,7 @@
 //! `InstanceHandle` is a reference-counting handle for an `Instance`.
 
 use crate::OpaqueRootScope;
+use crate::WasmFuncOrigin;
 use crate::prelude::*;
 use crate::runtime::vm::const_expr::{ConstEvalContext, ConstExprEvaluator};
 use crate::runtime::vm::export::{Export, ExportMemory};
@@ -553,12 +554,15 @@ impl Instance {
         store: StoreId,
         index: FuncIndex,
     ) -> crate::Func {
+        let instance = self.id;
         let func_ref = self.get_func_ref(index).unwrap();
 
         // SAFETY: the validity of `func_ref` is guaranteed by the validity of
         // `self`, and the contract that `store` must own `func_ref` is a
         // contract of this function itself.
-        unsafe { crate::Func::from_vm_func_ref(store, func_ref) }
+        let mut func = unsafe { crate::Func::from_vm_func_ref(store, func_ref) };
+        func.set_origin(WasmFuncOrigin { index, instance });
+        func
     }
 
     /// Lookup a table by index.

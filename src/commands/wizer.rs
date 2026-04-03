@@ -1,4 +1,4 @@
-use crate::commands::run::{CliInstance, Preloads, RunCommand};
+use crate::commands::run::{CliInstance, Preloads, Replaying, RunCommand};
 use crate::common::{RunCommon, RunTarget};
 use anyhow::{Context, Result};
 use std::fs;
@@ -86,7 +86,7 @@ impl WizerCommand {
             module_and_args: vec![self.input.clone().into()],
             preloads: self.preloads.clone(),
         };
-        let engine = run.new_engine()?;
+        let engine = run.new_engine(Replaying::No)?;
 
         // Instrument the input wasm with wizer.
         let (cx, main) = if is_component {

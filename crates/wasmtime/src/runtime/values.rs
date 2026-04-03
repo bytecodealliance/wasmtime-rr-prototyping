@@ -1163,9 +1163,9 @@ mod tests {
             || cfg!(target_arch = "riscv64")
             || cfg!(target_arch = "arm")
         {
-            24
+            32
         } else if cfg!(target_arch = "x86") {
-            20
+            28
         } else {
             panic!("unsupported architecture")
         };
@@ -1182,9 +1182,9 @@ mod tests {
             || cfg!(target_arch = "riscv64")
             || cfg!(target_arch = "arm")
         {
-            24
+            32
         } else if cfg!(target_arch = "x86") {
-            20
+            28
         } else {
             panic!("unsupported architecture")
         };

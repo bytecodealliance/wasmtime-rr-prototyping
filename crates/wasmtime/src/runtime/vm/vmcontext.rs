@@ -1484,6 +1484,12 @@ pub union ValRaw {
     ///
     /// This value is always stored in a little-endian format.
     exnref: u32,
+
+    /// A representation of underlying union as a byte vector.
+    ///
+    /// The size of this bytes array should exactly match the size of the union,
+    /// and be updated accordingly if the size changes.
+    bytes: [u8; 16],
 }
 
 // The `ValRaw` type is matched as `wasmtime_val_raw_t` in the C API so these
@@ -1492,6 +1498,8 @@ pub union ValRaw {
 const _: () = {
     assert!(mem::size_of::<ValRaw>() == 16);
     assert!(mem::align_of::<ValRaw>() == mem::align_of::<u64>());
+    // Assert that the `bytes` field is the same size as the union itself.
+    assert!(mem::size_of::<ValRaw>() == mem::size_of_val(ValRaw::i64(0).get_bytes()));
 };
 
 // This type is just a bag-of-bits so it's up to the caller to figure out how
@@ -1555,7 +1563,7 @@ impl ValRaw {
 
     /// Creates a WebAssembly `i64` value
     #[inline]
-    pub fn i64(i: i64) -> ValRaw {
+    pub const fn i64(i: i64) -> ValRaw {
         ValRaw { i64: i.to_le() }
     }
 
@@ -1697,6 +1705,20 @@ impl ValRaw {
         let exnref = u32::from_le(unsafe { self.exnref });
         assert!(cfg!(feature = "gc") || exnref == 0);
         exnref
+    }
+
+    /// Get the WebAssembly value's raw bytes
+    #[inline]
+    pub const fn get_bytes(&self) -> &[u8; mem::size_of::<Self>()] {
+        unsafe { &self.bytes }
+    }
+
+    /// Create a WebAssembly value from raw bytes
+    #[inline]
+    pub fn from_bytes(value: &[u8]) -> ValRaw {
+        let mut bytes = [0u8; mem::size_of::<ValRaw>()];
+        bytes[..value.len()].copy_from_slice(value);
+        ValRaw { bytes }
     }
 }
 

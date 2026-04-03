@@ -4,6 +4,7 @@ use crate::component::storage::storage_as_slice;
 use crate::component::types::ComponentFunc;
 use crate::component::values::Val;
 use crate::prelude::*;
+use crate::rr::{RRWasmFuncType, component_hooks};
 use crate::runtime::vm::component::{ComponentInstance, InstanceFlags, ResourceTables};
 use crate::runtime::vm::{Export, VMFuncRef};
 use crate::store::StoreOpaque;
@@ -566,7 +567,7 @@ impl Func {
     /// `LowerParams` and `LowerReturn` type. They must match the type of `self`
     /// for the params/results that are going to be produced. Additionally
     /// these types must be representable with a sequence of `ValRaw` values.
-    unsafe fn call_raw<T, Return, LowerParams, LowerReturn>(
+    pub(crate) unsafe fn call_raw<T, Return, LowerParams, LowerReturn>(
         &self,
         mut store: StoreContextMut<'_, T>,
         lower: impl FnOnce(
@@ -580,6 +581,12 @@ impl Func {
         LowerParams: Copy,
         LowerReturn: Copy,
     {
+        component_hooks::record_wasm_func_begin(
+            self.instance.id().instance(),
+            self.index,
+            store.0,
+        )?;
+
         let export = self.lifted_core_func(store.0);
 
         #[repr(C)]
@@ -618,14 +625,19 @@ impl Func {
         // and `ComponentType` implementations, hence `ComponentType` being an
         // `unsafe` trait.
         unsafe {
+            let params_and_returns = NonNull::new(core::ptr::slice_from_raw_parts_mut(
+                space.as_mut_ptr().cast(),
+                mem::size_of_val(space) / mem::size_of::<ValRaw>(),
+            ))
+            .unwrap();
+
+            let type_idx = self.abi_info(store.0).2;
+            let types = self.instance.id().get(store.0).component().types().clone();
             crate::Func::call_unchecked_raw(
                 &mut store,
                 export,
-                NonNull::new(core::ptr::slice_from_raw_parts_mut(
-                    space.as_mut_ptr().cast(),
-                    mem::size_of_val(space) / mem::size_of::<ValRaw>(),
-                ))
-                .unwrap(),
+                params_and_returns,
+                RRWasmFuncType::Component { type_idx, types },
             )?;
         }
 
@@ -721,6 +733,11 @@ impl Func {
 
     fn post_return_impl(&self, mut store: impl AsContextMut) -> Result<()> {
         let mut store = store.as_context_mut();
+        component_hooks::record_wasm_func_post_return(
+            self.instance.id().instance(),
+            self.index,
+            &mut store,
+        )?;
 
         let index = self.index;
         let vminstance = self.instance.id().get(store.0);
@@ -779,6 +796,7 @@ impl Func {
                     func,
                     NonNull::new(core::ptr::slice_from_raw_parts(&post_return_arg, 1).cast_mut())
                         .unwrap(),
+                    RRWasmFuncType::None,
                 )?;
             }
 
@@ -817,7 +835,9 @@ impl Func {
             params
                 .iter()
                 .zip(params_ty.types.iter())
-                .try_for_each(|(param, ty)| param.lower(cx, *ty, dst))
+                .try_for_each(|(param, ty)| {
+                    component_hooks::record_lower_flat(|cx, ty| param.lower(cx, ty, dst), cx, *ty)
+                })
         } else {
             Self::store_args(cx, &params_ty, params, dst)
         }
@@ -834,7 +854,13 @@ impl Func {
         let mut offset = ptr;
         for (ty, arg) in params_ty.types.iter().zip(args) {
             let abi = cx.types.canonical_abi(ty);
-            arg.store(cx, *ty, abi.next_field32_size(&mut offset))?;
+            let ptr = abi.next_field32_size(&mut offset);
+            component_hooks::record_lower_memory(
+                |cx, ty, ptr| arg.store(cx, ty, ptr),
+                cx,
+                *ty,
+                ptr,
+            )?;
         }
 
         dst[0].write(ValRaw::i64(ptr as i64));
@@ -842,7 +868,7 @@ impl Func {
         Ok(())
     }
 
-    fn lift_results<'a, 'b>(
+    pub(crate) fn lift_results<'a, 'b>(
         cx: &'a mut LiftContext<'b>,
         results_ty: InterfaceType,
         src: &'a [ValRaw],
@@ -907,7 +933,7 @@ impl Func {
     /// The `lower` closure provided should perform the actual lowering and
     /// return the result of the lowering operation which is then returned from
     /// this function as well.
-    fn with_lower_context<T>(
+    pub(crate) fn with_lower_context<T>(
         self,
         mut store: StoreContextMut<T>,
         may_enter: bool,

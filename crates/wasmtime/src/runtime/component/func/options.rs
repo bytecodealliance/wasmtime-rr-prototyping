@@ -1,15 +1,26 @@
 use crate::StoreContextMut;
+#[cfg(feature = "rr")]
+use crate::ValRaw;
 use crate::component::concurrent::ConcurrentState;
 use crate::component::matching::InstanceType;
 use crate::component::resources::{HostResourceData, HostResourceIndex, HostResourceTables};
 use crate::component::{Instance, ResourceType};
 use crate::prelude::*;
+use crate::rr::{DynamicMemorySlice, FixedMemorySlice};
+#[cfg(feature = "rr")]
+use crate::rr::{
+    RREvent, RRFuncArgValsConvertable, RecordBuffer, ReplayError, Replayer, ResultEvent, Validate,
+    component_events::ReallocEntryEvent, component_events::ReallocReturnEvent,
+    component_hooks::ReplayLoweringPhase,
+};
 use crate::runtime::vm::VMFuncRef;
 use crate::runtime::vm::component::{
     CallContexts, ComponentInstance, HandleTable, InstanceFlags, ResourceTables,
 };
 use crate::store::{StoreId, StoreOpaque};
 use alloc::sync::Arc;
+#[cfg(feature = "rr")]
+use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::ptr::NonNull;
 use wasmtime_environ::component::{
@@ -114,7 +125,37 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         &self.instance().component().env_component().options[self.options]
     }
 
-    /// Returns a view into memory as a mutable slice of bytes.
+    /// Return the `InstanceFlags` for this context
+    #[cfg(feature = "rr")]
+    fn instance_flags(&self) -> InstanceFlags {
+        let vminstance = self.instance.id().get(self.store.0);
+        let opts = self.options();
+        vminstance.instance_flags(opts.instance)
+    }
+
+    /// Returns a view into memory as a mutable slice of bytes + the
+    /// record buffer to record state.
+    ///
+    /// # Panics
+    ///
+    /// See [`as_slice`](Self::as_slice)
+    #[cfg(feature = "rr")]
+    fn as_slice_mut_with_recorder(&mut self) -> (&mut [u8], Option<&mut RecordBuffer>) {
+        self.instance
+            .options_memory_mut_with_recorder(self.store.0, self.options)
+    }
+
+    /// Returns a view into memory as an immutable slice of bytes.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if memory has not been configured for this lowering
+    /// (e.g. it wasn't present during the specification of canonical options).
+    pub fn as_slice(&self) -> &[u8] {
+        self.instance.options_memory(self.store.0, self.options)
+    }
+
+    /// Returns a view into memory as an mutable slice of bytes.
     ///
     /// # Panics
     ///
@@ -125,13 +166,13 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     }
 
     /// Invokes the memory allocation function (which is style after `realloc`)
-    /// with the specified parameters.
+    /// with the specified parameters. This method has no record/replay scaffolding
     ///
     /// # Panics
     ///
     /// This will panic if realloc hasn't been configured for this lowering via
     /// its canonical options.
-    pub fn realloc(
+    pub fn realloc_inner(
         &mut self,
         old: usize,
         old_size: usize,
@@ -162,7 +203,13 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         // Invoke the wasm malloc function using its raw and statically known
         // signature.
         let result = unsafe {
-            ReallocFunc::call_raw(&mut StoreContextMut(store), &realloc_ty, realloc, params)?
+            ReallocFunc::call_raw(
+                &mut StoreContextMut(store),
+                &realloc_ty,
+                realloc,
+                params,
+                None,
+            )?
         };
 
         if result % old_align != 0 {
@@ -182,6 +229,35 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         Ok(result)
     }
 
+    /// Wrapper around [Self::realloc_inner], but with record/replay scaffolding.
+    /// This should be the intended entrypoint for realloc calls in most situations.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if realloc hasn't been configured for this lowering via
+    /// its canonical options.
+    pub fn realloc(
+        &mut self,
+        old: usize,
+        old_size: usize,
+        old_align: u32,
+        new_size: usize,
+    ) -> Result<usize> {
+        #[cfg(feature = "rr")]
+        self.store.0.record_event(|| ReallocEntryEvent {
+            old_addr: old as u64,
+            old_size: old_size as u64,
+            old_align,
+            new_size: new_size as u64,
+        })?;
+        let result = self.realloc_inner(old, old_size, old_align, new_size);
+        #[cfg(feature = "rr")]
+        self.store.0.record_event_validation(|| {
+            ReallocReturnEvent(ResultEvent::from_anyhow_result_usize(&result))
+        })?;
+        result
+    }
+
     /// Returns a fixed mutable slice of memory `N` bytes large starting at
     /// offset `N`, panicking on out-of-bounds.
     ///
@@ -192,7 +268,15 @@ impl<'a, T: 'static> LowerContext<'a, T> {
     ///
     /// This will panic if memory has not been configured for this lowering
     /// (e.g. it wasn't present during the specification of canonical options).
-    pub fn get<const N: usize>(&mut self, offset: usize) -> &mut [u8; N] {
+    #[inline]
+    pub fn get<const N: usize>(&mut self, offset: usize) -> FixedMemorySlice<'_, N> {
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "rr")] {
+                let (slice_mut, recorder) = self.as_slice_mut_with_recorder();
+            } else {
+                let slice_mut = self.as_slice_mut();
+            }
+        }
         // FIXME: this bounds check shouldn't actually be necessary, all
         // callers of `ComponentType::store` have already performed a bounds
         // check so we're guaranteed that `offset..offset+N` is in-bounds. That
@@ -203,7 +287,37 @@ impl<'a, T: 'static> LowerContext<'a, T> {
         // For now I figure we can leave in this bounds check and if it becomes
         // an issue we can optimize further later, probably with judicious use
         // of `unsafe`.
-        self.as_slice_mut()[offset..].first_chunk_mut().unwrap()
+        FixedMemorySlice {
+            bytes: slice_mut[offset..].first_chunk_mut().unwrap(),
+            #[cfg(feature = "rr")]
+            offset,
+            #[cfg(feature = "rr")]
+            recorder,
+        }
+    }
+
+    /// The dynamically-sized version of [`get`](Self::get). If size of slice required is
+    /// statically known, prefer the const version for optimal efficiency
+    ///
+    /// # Panics
+    ///
+    /// Refer to [`get`](Self::get).
+    #[inline]
+    pub fn get_dyn(&mut self, offset: usize, size: usize) -> DynamicMemorySlice<'_> {
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "rr")] {
+                let (slice_mut, recorder) = self.as_slice_mut_with_recorder();
+            } else {
+                let slice_mut = self.as_slice_mut();
+            }
+        }
+        DynamicMemorySlice {
+            bytes: &mut slice_mut[offset..][..size],
+            #[cfg(feature = "rr")]
+            offset,
+            #[cfg(feature = "rr")]
+            recorder,
+        }
     }
 
     /// Lowers an `own` resource into the guest, converting the `rep` specified
@@ -290,6 +404,156 @@ impl<'a, T: 'static> LowerContext<'a, T> {
             },
             host_resource_data,
         )
+    }
+
+    /// Perform a replay of all the type lowering-associated events for this context
+    ///
+    /// These typically include all `Lower*` and `Realloc*` event, along with the putting
+    /// the resulting value into storage (if provided) on the following termination conditions:
+    /// - `HostFunctionReturnEvent` when phase == HostFuncReturn
+    /// - `WasmFunctionEntryEvent` when phase == WasmFuncEntry
+    ///
+    /// ## Important Notes
+    ///
+    /// * It is assumed that this is only invoked at the root lower/store calls
+    /// * Panics if invoked while replay is not enabled
+    ///
+    #[cfg(feature = "rr")]
+    pub fn replay_lowering(
+        &mut self,
+        mut result_storage: Option<&mut [MaybeUninit<ValRaw>]>,
+        phase: ReplayLoweringPhase,
+    ) -> Result<()> {
+        if self.store.0.replay_buffer_mut().is_none() {
+            return Ok(());
+        }
+
+        unsafe {
+            self.instance_flags().set_may_leave(false);
+        }
+
+        let mut complete = false;
+        let mut lowering_error: Option<ReplayError> = None;
+        // No nested expected; these depths should only be 1
+        let mut realloc_stack = Vec::<Result<usize>>::new();
+        // Lowering tracks is only for ordering entry/exit events
+        let mut lower_stack = Vec::<()>::new();
+        let mut lower_store_stack = Vec::<()>::new();
+        while !complete {
+            let buf = self.store.0.replay_buffer_mut().unwrap();
+            let event = buf.next_event()?;
+            let run_validate = buf.settings().validate && buf.trace_settings().add_validation;
+            match event {
+                RREvent::HostFuncReturn(e) => {
+                    match phase {
+                        ReplayLoweringPhase::HostFuncReturn => {}
+                        _ => bail!("HostFuncReturn encountered in invalid phase"),
+                    }
+                    // End of the lowering process (for host calls)
+                    if let Some(err) = lowering_error {
+                        return Err(err.into());
+                    }
+                    if let Some(storage) = result_storage.as_deref_mut() {
+                        e.args.into_raw_slice(storage);
+                    }
+                    complete = true;
+                }
+                RREvent::HostFuncReturnEmptyEvent => {
+                    match phase {
+                        ReplayLoweringPhase::HostFuncReturn => {}
+                        _ => bail!("HostFuncReturnEmpty encountered in invalid phase"),
+                    }
+                    // End of the lowering process (for host calls)
+                    if let Some(err) = lowering_error {
+                        return Err(err.into());
+                    }
+                    complete = true;
+                }
+                RREvent::ComponentWasmFuncEntry(e) => {
+                    match phase {
+                        ReplayLoweringPhase::WasmFuncEntry => {}
+                        _ => bail!("WasmFuncEntry encountered in invalid phase"),
+                    }
+                    // End of the lowering process (for wasm calls)
+                    if let Some(e) = lowering_error {
+                        return Err(e.into());
+                    }
+                    if let Some(storage) = result_storage.as_deref_mut() {
+                        e.args.into_raw_slice(storage);
+                    }
+                    complete = true;
+                }
+                RREvent::ComponentReallocEntry(e) => {
+                    let result = self.realloc_inner(
+                        e.old_addr as usize,
+                        e.old_size as usize,
+                        e.old_align,
+                        e.new_size as usize,
+                    );
+                    if run_validate {
+                        realloc_stack.push(result);
+                    }
+                }
+                // No return value to validate for lower/lower-store; store error and just check that entry happened before
+                RREvent::ComponentLowerFlatReturn(e) => {
+                    if run_validate {
+                        lower_stack.pop().ok_or(ReplayError::InvalidEventPosition)?;
+                        lowering_error = e.0.ret().map_err(Into::into).err();
+                    }
+                }
+                RREvent::ComponentLowerMemoryReturn(e) => {
+                    if run_validate {
+                        lower_store_stack
+                            .pop()
+                            .ok_or(ReplayError::InvalidEventPosition)?;
+                        lowering_error = e.0.ret().map_err(Into::into).err();
+                    }
+                }
+                RREvent::ComponentMemorySliceWrite(e) => {
+                    let offset = e.offset as usize;
+                    // The bounds check is performed here is required here (in the absence of
+                    // trace validation) to protect against malicious out-of-bounds slice writes
+                    self.as_slice_mut()[offset..offset + e.bytes.len()]
+                        .copy_from_slice(e.bytes.as_slice());
+                }
+                // Optional events
+                //
+                // Realloc or any lowering methods cannot call back to the host. Hence, you cannot
+                // have host calls entries during this method
+                RREvent::HostFuncEntry(_) => {
+                    bail!("Cannot call back into host during lowering");
+                }
+                // Unwrapping should never occur on valid executions since *Entry should be before *Return in trace
+                RREvent::ComponentReallocReturn(e) => {
+                    if run_validate {
+                        lowering_error =
+                            e.0.validate(&realloc_stack.pop().unwrap().map(|r| r as u64))
+                                .err()
+                    }
+                }
+                RREvent::ComponentLowerFlatEntry(_) => {
+                    // All we want here is ensuring Entry occurs before Return
+                    if run_validate {
+                        lower_stack.push(())
+                    }
+                }
+                RREvent::ComponentLowerMemoryEntry(_) => {
+                    // All we want here is ensuring Entry occurs before Return
+                    if run_validate {
+                        lower_store_stack.push(())
+                    }
+                }
+                _ => {
+                    bail!("Invalid event \'{event:?}\' encountered during lowering");
+                }
+            };
+        }
+
+        unsafe {
+            self.instance_flags().set_may_leave(true);
+        }
+
+        Ok(())
     }
 
     /// See [`HostResourceTables::enter_call`].

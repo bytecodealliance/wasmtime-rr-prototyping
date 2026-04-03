@@ -53,6 +53,7 @@
 use crate::component::func::{self, Func};
 use crate::component::{HasData, HasSelf, Instance, Resource, ResourceTable, ResourceTableError};
 use crate::fiber::{self, StoreFiber, StoreFiberYield};
+use crate::rr::{RRWasmFuncType, component_hooks};
 use crate::store::{Store, StoreId, StoreInner, StoreOpaque, StoreToken};
 use crate::vm::component::{CallContext, ComponentInstance, InstanceFlags, ResourceTables};
 use crate::vm::{AlwaysMut, SendSyncPtr, VMFuncRef, VMMemoryDefinition, VMStore};
@@ -1715,7 +1716,8 @@ impl Instance {
     ///
     /// SAFETY: The raw pointer arguments must be valid references to guest
     /// functions (with the appropriate signatures) when the closures queued by
-    /// this function are called.
+    /// this function are called. For RR, the rr_handle must be a valid `Func`
+    /// corresponding to `callee` if provided
     unsafe fn queue_call<T: 'static>(
         self,
         mut store: StoreContextMut<T>,
@@ -1727,6 +1729,7 @@ impl Instance {
         async_: bool,
         callback: Option<SendSyncPtr<VMFuncRef>>,
         post_return: Option<SendSyncPtr<VMFuncRef>>,
+        rr_handle: Option<Func>,
     ) -> Result<()> {
         /// Return a closure which will call the specified function in the scope
         /// of the specified task.
@@ -1741,7 +1744,8 @@ impl Instance {
         /// nothing.
         ///
         /// SAFETY: `callee` must be a valid `*mut VMFuncRef` at the time when
-        /// the returned closure is called.
+        /// the returned closure is called. For RR, the handle must be a valid `Func`
+        /// corresponding to `callee` if provided
         unsafe fn make_call<T: 'static>(
             store: StoreContextMut<T>,
             guest_thread: QualifiedThreadId,
@@ -1749,6 +1753,7 @@ impl Instance {
             param_count: usize,
             result_count: usize,
             flags: Option<InstanceFlags>,
+            rr_handle: Option<Func>,
         ) -> impl FnOnce(&mut dyn VMStore) -> Result<[MaybeUninit<ValRaw>; MAX_FLAT_PARAMS]>
         + Send
         + Sync
@@ -1766,6 +1771,14 @@ impl Instance {
                 let may_enter_after_call = task.call_post_return_automatically();
                 let lower = task.lower_params.take().unwrap();
 
+                if let Some(func) = rr_handle {
+                    component_hooks::record_wasm_func_begin(
+                        func.instance().id().instance(),
+                        func.index(),
+                        store.store_opaque_mut(),
+                    )?;
+                }
+
                 lower(store, &mut storage[..param_count])?;
 
                 let mut store = token.as_context_mut(store);
@@ -1776,6 +1789,20 @@ impl Instance {
                     if let Some(mut flags) = flags {
                         flags.set_may_enter(false);
                     }
+
+                    let rr_type = if let Some(func) = rr_handle {
+                        let type_idx = func.abi_info(store.0).2;
+                        let types = func
+                            .instance()
+                            .id()
+                            .get(store.0)
+                            .component()
+                            .types()
+                            .clone();
+                        RRWasmFuncType::Component { type_idx, types }
+                    } else {
+                        RRWasmFuncType::None
+                    };
                     crate::Func::call_unchecked_raw(
                         &mut store,
                         callee.as_non_null(),
@@ -1784,7 +1811,9 @@ impl Instance {
                                 as *mut [MaybeUninit<ValRaw>] as _,
                         )
                         .unwrap(),
+                        rr_type,
                     )?;
+
                     if let Some(mut flags) = flags {
                         flags.set_may_enter(may_enter_after_call);
                     }
@@ -1805,6 +1834,7 @@ impl Instance {
                 param_count,
                 result_count,
                 flags,
+                rr_handle,
             )
         };
 
@@ -1962,6 +1992,7 @@ impl Instance {
                                     &mut store,
                                     func.as_non_null(),
                                     slice::from_ref(&post_return_arg).into(),
+                                    RRWasmFuncType::None,
                                 )?;
                             }
                         }
@@ -2107,6 +2138,7 @@ impl Instance {
                 // for details) we know it takes count parameters and returns
                 // `dst.len()` results.
                 unsafe {
+                    // No RR on guest->guest calls
                     crate::Func::call_unchecked_raw(
                         &mut store,
                         start.as_non_null(),
@@ -2114,6 +2146,7 @@ impl Instance {
                             &mut src[..count.max(dst.len())] as *mut [MaybeUninit<ValRaw>] as _,
                         )
                         .unwrap(),
+                        RRWasmFuncType::None,
                     )?;
                 }
                 dst.copy_from_slice(&src[..dst.len()]);
@@ -2142,10 +2175,12 @@ impl Instance {
                     // for details) we know it takes `src.len()` parameters and
                     // returns up to 1 result.
                     unsafe {
+                        // No RR on guest->guest calls
                         crate::Func::call_unchecked_raw(
                             &mut store,
                             return_.as_non_null(),
                             my_src.as_mut_slice().into(),
+                            RRWasmFuncType::None,
                         )?;
                     }
                     let state = store.0.concurrent_state_mut();
@@ -2235,6 +2270,7 @@ impl Instance {
                 &mut store,
                 function.as_non_null(),
                 params.as_mut_slice().into(),
+                RRWasmFuncType::None,
             )?;
             flags.set_may_enter(may_enter_after_call);
         }
@@ -2330,6 +2366,7 @@ impl Instance {
                 (flags & START_FLAG_ASYNC_CALLEE) != 0,
                 NonNull::new(callback).map(SendSyncPtr::new),
                 NonNull::new(post_return).map(SendSyncPtr::new),
+                None,
             )?;
         }
 
@@ -4985,6 +5022,11 @@ pub(crate) fn queue_call<T: 'static, R: Send + 'static>(
     mut store: StoreContextMut<T>,
     prepared: PreparedCall<R>,
 ) -> Result<impl Future<Output = Result<(R, oneshot::Receiver<()>)>> + Send + 'static + use<T, R>> {
+    #[cfg(feature = "rr")]
+    assert!(
+        !(store.engine().is_recording() || store.engine().is_replaying()),
+        "component model async ABI not supported during recording or replaying"
+    );
     let PreparedCall {
         handle,
         thread,
@@ -5047,6 +5089,7 @@ fn queue_call0<T: 'static>(
             is_concurrent,
             callback,
             post_return.map(SendSyncPtr::new),
+            Some(handle),
         )
     }
 }

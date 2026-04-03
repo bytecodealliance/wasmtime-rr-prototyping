@@ -99,6 +99,28 @@ impl core::hash::Hash for ModuleVersionStrategy {
     }
 }
 
+impl ModuleVersionStrategy {
+    /// Get the string-encoding version of the module.
+    pub fn as_str(&self) -> &str {
+        match &self {
+            Self::WasmtimeVersion => env!("CARGO_PKG_VERSION_MAJOR"),
+            Self::Custom(c) => c,
+            Self::None => "",
+        }
+    }
+}
+
+/// Configuration for record/replay
+#[derive(Clone)]
+pub enum RRConfig {
+    /// Recording on store is enabled
+    Recording,
+    /// Replaying on store is enabled
+    Replaying,
+    /// No record/replay is enabled
+    None,
+}
+
 /// Global configuration options used to create an [`Engine`](crate::Engine)
 /// and customize its behavior.
 ///
@@ -164,6 +186,8 @@ pub struct Config {
     pub(crate) macos_use_mach_ports: bool,
     pub(crate) detect_host_feature: Option<fn(&str) -> Option<bool>>,
     pub(crate) x86_float_abi_ok: Option<bool>,
+    #[cfg(feature = "rr")]
+    pub(crate) rr_config: RRConfig,
 }
 
 /// User-provided configuration for the compiler.
@@ -273,6 +297,8 @@ impl Config {
             #[cfg(not(feature = "std"))]
             detect_host_feature: None,
             x86_float_abi_ok: None,
+            #[cfg(feature = "rr")]
+            rr_config: RRConfig::None,
         };
         #[cfg(any(feature = "cranelift", feature = "winch"))]
         {
@@ -2308,7 +2334,7 @@ impl Config {
         target_lexicon::Triple::host()
     }
 
-    pub(crate) fn validate(&self) -> Result<(Tunables, WasmFeatures)> {
+    pub(crate) fn validate(&mut self) -> Result<(Tunables, WasmFeatures)> {
         let features = self.features();
 
         // First validate that the selected compiler backend and configuration
@@ -2348,6 +2374,15 @@ impl Config {
         if !cfg!(feature = "gc") && features.contains(WasmFeatures::EXCEPTIONS) {
             bail!("exceptions support requires garbage collection (GC) to be enabled in the build");
         }
+
+        #[cfg(feature = "rr")]
+        match &self.rr_config {
+            RRConfig::Recording | RRConfig::Replaying => {
+                self.validate_determinism_conflicts()?;
+                self.enforce_determinism();
+            }
+            _ => {}
+        };
 
         let mut tunables = Tunables::default_for_target(&self.compiler_target())?;
 
@@ -2867,6 +2902,53 @@ impl Config {
     ///   enabled to avoid float-related hostcalls.
     pub unsafe fn x86_float_abi_ok(&mut self, enable: bool) -> &mut Self {
         self.x86_float_abi_ok = Some(enable);
+        self
+    }
+
+    /// Enforce deterministic execution configurations. Currently, this means the following:
+    /// * Enabling NaN canonicalization with [`Config::cranelift_nan_canonicalization`].
+    /// * Enabling deterministic relaxed SIMD with [`Config::relaxed_simd_deterministic`].
+    #[inline]
+    pub fn enforce_determinism(&mut self) -> &mut Self {
+        #[cfg(any(feature = "cranelift", feature = "winch"))]
+        self.cranelift_nan_canonicalization(true);
+        self.relaxed_simd_deterministic(true);
+        self
+    }
+
+    /// Validate if the current configuration has conflicting overrides that prevent
+    /// execution determinism. Returns an error if a conflict exists.
+    ///
+    /// Note: Keep this in sync with [`Config::enforce_determinism`].
+    #[inline]
+    #[cfg(feature = "rr")]
+    pub(crate) fn validate_determinism_conflicts(&self) -> Result<()> {
+        if let Some(v) = self.tunables.relaxed_simd_deterministic {
+            if v == false {
+                bail!("Relaxed deterministic SIMD cannot be disabled when determinism is enforced");
+            }
+        }
+        #[cfg(any(feature = "cranelift", feature = "winch"))]
+        if let Some(v) = self
+            .compiler_config
+            .settings
+            .get("enable_nan_canonicalization")
+        {
+            if v != "true" {
+                bail!("NaN canonicalization cannot be disabled when determinism is enforced");
+            }
+        }
+        Ok(())
+    }
+
+    /// Enable execution trace recording or replaying to the configuration.
+    ///
+    /// When either recording/replaying are enabled, determinism is implicitly
+    /// enforced (see [`Config::enforce_determinism`] for details).
+    #[cfg(feature = "rr")]
+    #[inline]
+    pub fn rr(&mut self, cfg: RRConfig) -> &mut Self {
+        self.rr_config = cfg;
         self
     }
 }

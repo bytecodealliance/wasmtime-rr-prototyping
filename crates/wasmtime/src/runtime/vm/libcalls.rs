@@ -57,6 +57,7 @@
 #[cfg(feature = "stack-switching")]
 use super::stack_switching::VMContObj;
 use crate::prelude::*;
+use crate::rr;
 use crate::runtime::store::{InstanceId, StoreInstanceId, StoreOpaque};
 #[cfg(feature = "gc")]
 use crate::runtime::vm::VMGcRef;
@@ -229,6 +230,15 @@ fn memory_grow(
             .await?
             .map(|size_in_bytes| AllocationSize(size_in_bytes >> page_size_log2));
 
+        // Record/replay hook for memory.grow
+        rr::core_hooks::record_and_replay_validate_memory_grow(
+            match &result {
+                Some(a) => u32::try_from(a.0)?,
+                None => u32::MAX,
+            },
+            store,
+        )?;
+
         Ok(result)
     })?
 }
@@ -295,6 +305,16 @@ unsafe fn table_grow_func_ref(
             })
             .await?
             .map(AllocationSize);
+
+        // Record/replay hook for table.grow
+        rr::core_hooks::record_and_replay_validate_table_grow(
+            match &result {
+                Some(a) => u32::try_from(a.0)?,
+                None => u32::MAX,
+            },
+            store,
+        )?;
+
         Ok(result)
     })?
 }
@@ -328,6 +348,16 @@ fn table_grow_gc_ref(
             })
             .await?
             .map(AllocationSize);
+
+        // Record/replay hook for table.grow
+        rr::core_hooks::record_and_replay_validate_table_grow(
+            match &result {
+                Some(a) => u32::try_from(a.0)?,
+                None => u32::MAX,
+            },
+            store,
+        )?;
+
         Ok(result)
     })?
 }
@@ -360,6 +390,16 @@ unsafe fn table_grow_cont_obj(
             })
             .await?
             .map(AllocationSize);
+
+        // Record/replay hook for table.grow
+        rr::core_hooks::record_and_replay_validate_table_grow(
+            match &result {
+                Some(a) => u32::try_from(a.0)?,
+                None => u32::MAX,
+            },
+            store,
+        )?;
+
         Ok(result)
     })?
 }

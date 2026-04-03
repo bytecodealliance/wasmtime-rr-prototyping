@@ -92,6 +92,19 @@ enum Subcommand {
 
     #[cfg(feature = "wizer")]
     Wizer(wasmtime_cli::commands::WizerCommand),
+
+    /// Run a determinstic, embedding-agnostic replay execution of the Wasm module
+    /// according to a prior recorded execution trace (e.g. generated with the
+    /// `--record` option under `wasmtime run`).
+    ///
+    /// The options below are the superset of the `run` command. The notable options
+    /// added for replay are `--trace` (to specify the recorded traces) and
+    /// corresponding settings (e.g. `--validate`)
+    ///
+    /// Note: Minimal configs for deterministic Wasm semantics will be
+    /// enforced during replay by default (NaN canonicalization, deterministic relaxed SIMD)
+    #[cfg(all(feature = "run", feature = "rr"))]
+    Replay(wasmtime_cli::commands::ReplayCommand),
 }
 
 impl Wasmtime {
@@ -132,6 +145,9 @@ impl Wasmtime {
 
             #[cfg(feature = "wizer")]
             Subcommand::Wizer(c) => c.execute(),
+
+            #[cfg(feature = "rr")]
+            Subcommand::Replay(c) => c.execute(),
         }
     }
 }

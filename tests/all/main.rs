@@ -44,6 +44,8 @@ mod piped_tests;
 mod pooling_allocator;
 mod pulley;
 mod relocs;
+#[cfg(feature = "rr")]
+mod rr;
 mod stack_creator;
 mod stack_overflow;
 mod store;

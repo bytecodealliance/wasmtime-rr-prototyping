@@ -497,6 +497,31 @@ wasmtime_option_group! {
     }
 }
 
+wasmtime_option_group! {
+    #[derive(PartialEq, Clone, Deserialize)]
+    #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+    pub struct RecordOptions {
+        /// Filename for the recorded execution trace (or empty string to skip writing a file).
+        pub path: Option<String>,
+        /// Include (optional) signatures to facilitate validation checks during replay
+        /// (see `wasmtime replay` for details).
+        pub validation_metadata: Option<bool>,
+        /// Writer buffer size (in bytes) for internal buffering during recording. Defaults to 8 KiB.
+        pub buffer_size: Option<usize>,
+        /// Enable threaded (async) recording writer. Decouples serialization from file I/O
+        /// by shipping buffers to a background thread.
+        pub threaded: Option<bool>,
+        /// Maximum number of buffers queued for the background writer thread.
+        /// Higher values tolerate more disk latency at the cost of memory. Defaults to 8.
+        /// Only used when `threaded` is enabled.
+        pub channels: Option<usize>,
+    }
+
+    enum Record {
+        ...
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct WasiNnGraph {
     pub format: String,
@@ -547,6 +572,18 @@ pub struct CommonOptions {
     #[serde(skip)]
     wasi_raw: Vec<opt::CommaSeparated<Wasi>>,
 
+    /// Options to enable and configure execution recording, `-R help` to see all.
+    ///
+    /// Generates a serialized trace of the Wasm module execution that captures all
+    /// non-determinism observable by the module. This trace can subsequently be
+    /// re-executed in a determinstic, embedding-agnostic manner (see the `wasmtime replay` command).
+    ///
+    /// Note: Minimal configuration options for deterministic Wasm semantics will be
+    /// enforced during recording by default (NaN canonicalization, deterministic relaxed SIMD).
+    #[arg(short = 'R', long = "record", value_name = "KEY[=VAL[,..]]")]
+    #[serde(skip)]
+    record_raw: Vec<opt::CommaSeparated<Record>>,
+
     // These fields are filled in by the `configure` method below via the
     // options parsed from the CLI above. This is what the CLI should use.
     #[arg(skip)]
@@ -572,6 +609,10 @@ pub struct CommonOptions {
     #[arg(skip)]
     #[serde(rename = "wasi", default)]
     pub wasi: WasiOptions,
+
+    #[arg(skip)]
+    #[serde(rename = "record", default)]
+    pub record: RecordOptions,
 
     /// The target triple; default is the host triple
     #[arg(long, value_name = "TARGET")]
@@ -619,12 +660,14 @@ impl CommonOptions {
             debug_raw: Vec::new(),
             wasm_raw: Vec::new(),
             wasi_raw: Vec::new(),
+            record_raw: Vec::new(),
             configured: true,
             opts: Default::default(),
             codegen: Default::default(),
             debug: Default::default(),
             wasm: Default::default(),
             wasi: Default::default(),
+            record: Default::default(),
             target: None,
             config: None,
         }
@@ -642,12 +685,14 @@ impl CommonOptions {
             self.debug = toml_options.debug;
             self.wasm = toml_options.wasm;
             self.wasi = toml_options.wasi;
+            self.record = toml_options.record;
         }
         self.opts.configure_with(&self.opts_raw);
         self.codegen.configure_with(&self.codegen_raw);
         self.debug.configure_with(&self.debug_raw);
         self.wasm.configure_with(&self.wasm_raw);
         self.wasi.configure_with(&self.wasi_raw);
+        self.record.configure_with(&self.record_raw);
         Ok(())
     }
 
@@ -1004,6 +1049,15 @@ impl CommonOptions {
             config.gc_support(enable);
         }
 
+        let record = &self.record;
+        match_feature! {
+            ["rr" : &record.path]
+            _path => {
+                config.rr(wasmtime::RRConfig::Recording);
+            },
+            _ => err,
+        }
+
         Ok(config)
     }
 
@@ -1113,6 +1167,7 @@ mod tests {
             [debug]
             [wasm]
             [wasi]
+            [record]
         "#;
         let mut common_options: CommonOptions = toml::from_str(basic_toml).unwrap();
         common_options.config(None).unwrap();
@@ -1235,6 +1290,8 @@ impl fmt::Display for CommonOptions {
             wasm,
             wasi_raw,
             wasi,
+            record_raw,
+            record,
             configured,
             target,
             config,
@@ -1251,6 +1308,7 @@ impl fmt::Display for CommonOptions {
         let wasi_flags;
         let wasm_flags;
         let debug_flags;
+        let record_flags;
 
         if *configured {
             codegen_flags = codegen.to_options();
@@ -1258,6 +1316,7 @@ impl fmt::Display for CommonOptions {
             wasi_flags = wasi.to_options();
             wasm_flags = wasm.to_options();
             opts_flags = opts.to_options();
+            record_flags = record.to_options();
         } else {
             codegen_flags = codegen_raw
                 .iter()
@@ -1268,6 +1327,11 @@ impl fmt::Display for CommonOptions {
             wasi_flags = wasi_raw.iter().flat_map(|t| t.0.iter()).cloned().collect();
             wasm_flags = wasm_raw.iter().flat_map(|t| t.0.iter()).cloned().collect();
             opts_flags = opts_raw.iter().flat_map(|t| t.0.iter()).cloned().collect();
+            record_flags = record_raw
+                .iter()
+                .flat_map(|t| t.0.iter())
+                .cloned()
+                .collect();
         }
 
         for flag in codegen_flags {
@@ -1284,6 +1348,9 @@ impl fmt::Display for CommonOptions {
         }
         for flag in debug_flags {
             write!(f, "-D{flag} ")?;
+        }
+        for flag in record_flags {
+            write!(f, "-R{flag} ")?;
         }
 
         Ok(())

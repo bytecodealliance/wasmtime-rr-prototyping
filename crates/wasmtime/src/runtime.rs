@@ -48,6 +48,7 @@ pub(crate) mod module;
 #[cfg(feature = "debug-builtins")]
 pub(crate) mod native_debug;
 pub(crate) mod resources;
+pub(crate) mod rr;
 pub(crate) mod store;
 pub(crate) mod trampoline;
 pub(crate) mod trap;
@@ -90,6 +91,12 @@ pub use linker::*;
 pub use memory::*;
 pub use module::{Module, ModuleExport};
 pub use resources::*;
+#[cfg(feature = "rr")]
+pub use rr::{
+    RecordSettings, RecordWriter, ReplayEnvironment, ReplayInstance, ReplayReader, ReplaySettings,
+};
+#[cfg(all(feature = "rr", feature = "std"))]
+pub use rr::{ThreadedWriter, ThreadedWriterConfig};
 #[cfg(all(feature = "async", feature = "call-hook"))]
 pub use store::CallHookHandler;
 pub use store::{

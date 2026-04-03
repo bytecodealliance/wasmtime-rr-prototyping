@@ -1,5 +1,6 @@
 use crate::linker::{Definition, DefinitionType};
 use crate::prelude::*;
+use crate::rr::core_hooks;
 use crate::runtime::vm::{
     self, Imports, ModuleRuntimeInfo, VMFuncRef, VMFunctionImport, VMGlobalImport, VMMemoryImport,
     VMStore, VMTableImport, VMTagImport,
@@ -120,7 +121,9 @@ impl Instance {
         // `typecheck_externs` above which satisfies the condition that all
         // the imports are valid for this module.
         assert!(!store.0.async_support());
-        vm::assert_ready(unsafe { Instance::new_started(&mut store, module, imports.as_ref()) })
+        vm::assert_ready(unsafe {
+            Instance::new_started(&mut store, module, imports.as_ref(), false)
+        })
     }
 
     /// Same as [`Instance::new`], except for usage in [asynchronous stores].
@@ -203,7 +206,7 @@ impl Instance {
         let mut store = store.as_context_mut();
         let imports = Instance::typecheck_externs(store.0, module, imports)?;
         // See `new` for notes on this unsafety
-        unsafe { Instance::new_started(&mut store, module, imports.as_ref()).await }
+        unsafe { Instance::new_started(&mut store, module, imports.as_ref(), false).await }
     }
 
     fn typecheck_externs(
@@ -249,6 +252,7 @@ impl Instance {
         store: &mut StoreContextMut<'_, T>,
         module: &Module,
         imports: Imports<'_>,
+        from_component: bool,
     ) -> Result<Instance> {
         let (instance, start) = {
             let (mut limiter, store) = store.0.resource_limiter_and_store_opaque();
@@ -256,6 +260,19 @@ impl Instance {
             // function.
             unsafe { Instance::new_raw(store, limiter.as_mut(), module, imports).await? }
         };
+
+        // Record/replay hooks
+        store.0.validate_rr_config()?;
+        if !from_component {
+            // Components already record instantiation, so do not record their internal modules
+            core_hooks::rr_validate_module_unexported_memory(&module)?;
+            core_hooks::record_and_replay_validate_instantiation(
+                store,
+                *module.checksum(),
+                instance.id(),
+            )?;
+        }
+
         if let Some(start) = start {
             if store.0.async_support() {
                 #[cfg(feature = "async")]
@@ -475,7 +492,7 @@ impl Instance {
         Some(self._get_export(store, export.entity))
     }
 
-    fn _get_export(&self, store: &mut StoreOpaque, entity: EntityIndex) -> Extern {
+    pub(crate) fn _get_export(&self, store: &mut StoreOpaque, entity: EntityIndex) -> Extern {
         let id = store.id();
         // SAFETY: the store `id` owns this instance and all exports contained
         // within.
@@ -872,7 +889,7 @@ impl<T: 'static> InstancePre<T> {
         // in match the module we're instantiating.
         assert!(!store.0.async_support());
         vm::assert_ready(unsafe {
-            Instance::new_started(&mut store, &self.module, imports.as_ref())
+            Instance::new_started(&mut store, &self.module, imports.as_ref(), false)
         })
     }
 
@@ -903,7 +920,7 @@ impl<T: 'static> InstancePre<T> {
         // This unsafety should be handled by the type-checking performed by the
         // constructor of `InstancePre` to assert that all the imports we're passing
         // in match the module we're instantiating.
-        unsafe { Instance::new_started(&mut store, &self.module, imports.as_ref()).await }
+        unsafe { Instance::new_started(&mut store, &self.module, imports.as_ref(), false).await }
     }
 }
 

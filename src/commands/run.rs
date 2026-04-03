@@ -101,6 +101,87 @@ pub enum CliInstance {
     Component(wasmtime::component::Instance),
 }
 
+/// Flag to indicate whether we are performing a replay run or not.
+pub enum Replaying {
+    /// Replay mode enabled.
+    Yes,
+    /// Replay mode disabled.
+    No,
+}
+
+/// Implementation of record/replay configuration and setup
+#[cfg(feature = "rr")]
+pub mod rr_impl {
+    use super::{Replaying, Result, Store};
+    use std::{fs, io};
+    use wasmtime::{Config, RecordSettings, ThreadedWriter, ThreadedWriterConfig};
+    use wasmtime_cli_flags::RecordOptions;
+
+    /// Setup replay configuration on the given [`Config`]
+    pub fn config_replay(config: &mut Config, replaying: Replaying) {
+        if let Replaying::Yes = replaying {
+            config.rr(wasmtime::RRConfig::Replaying);
+        }
+    }
+
+    /// Setup record configuration on the given [`Store`]
+    pub fn recording_for_store<T: 'static>(
+        store: &mut Store<T>,
+        record: &RecordOptions,
+    ) -> Result<()> {
+        if let Some(path) = &record.path {
+            let default_settings = RecordSettings::default();
+            let settings = RecordSettings {
+                add_validation: record
+                    .validation_metadata
+                    .unwrap_or(default_settings.add_validation),
+            };
+            if path.trim().is_empty() {
+                store.record(io::sink(), settings)?;
+            } else {
+                let buffer_capacity = record.buffer_size.unwrap_or(8 * 1024); // Default to 8 KiB buffer
+                let file = fs::File::create(&path)?;
+                if record.threaded.unwrap_or(false) {
+                    let writer = ThreadedWriter::new(
+                        Box::new(file),
+                        ThreadedWriterConfig {
+                            buffer_capacity,
+                            channels: record.channels.unwrap_or(8),
+                        },
+                    );
+                    store.record(writer, settings)?;
+                } else {
+                    let writer = io::BufWriter::with_capacity(buffer_capacity, file);
+                    store.record(writer, settings)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Implementation of record/replay configuration and setup
+#[cfg(not(feature = "rr"))]
+pub mod rr_impl {
+    use super::{Replaying, Result, Store};
+    use wasmtime::Config;
+    use wasmtime_cli_flags::RecordOptions;
+
+    /// Setup replay configuration on the given [`Config`]
+    pub fn config_replay(config: &mut Config, replaying: Replaying) {
+        let _ = (config, replaying);
+    }
+
+    /// Setup record configuration on the given [`Store`]
+    pub fn recording_for_store<T: 'static>(
+        store: &mut Store<T>,
+        record: &RecordOptions,
+    ) -> Result<()> {
+        let _ = (store, record);
+        Ok(())
+    }
+}
+
 impl RunCommand {
     /// Executes the command.
     #[cfg(feature = "run")]
@@ -113,7 +194,7 @@ impl RunCommand {
         runtime.block_on(async {
             self.run.common.init_logging()?;
 
-            let engine = self.new_engine()?;
+            let engine = self.new_engine(Replaying::No)?;
             let main = self
                 .run
                 .load_module(&engine, self.module_and_args[0].as_ref())?;
@@ -126,9 +207,11 @@ impl RunCommand {
     }
 
     /// Creates a new `Engine` with the configuration for this command.
-    pub fn new_engine(&mut self) -> Result<Engine> {
+    pub fn new_engine(&mut self, replaying: Replaying) -> Result<Engine> {
         let mut config = self.run.common.config(None)?;
         config.async_support(true);
+
+        rr_impl::config_replay(&mut config, replaying);
 
         if self.run.common.wasm.timeout.is_some() {
             config.epoch_interruption(true);
@@ -207,6 +290,8 @@ impl RunCommand {
             store.set_fuel(fuel)?;
         }
 
+        rr_impl::recording_for_store(&mut store, &self.run.common.record)?;
+
         Ok((store, linker))
     }
 
@@ -228,6 +313,7 @@ impl RunCommand {
             .wasm
             .timeout
             .unwrap_or(std::time::Duration::MAX);
+
         let result = tokio::time::timeout(dur, async {
             let mut profiled_modules: Vec<(String, Module)> = Vec::new();
             if let RunTarget::Core(m) = &main {
@@ -1169,7 +1255,7 @@ impl RunCommand {
 pub struct Host {
     // Legacy wasip1 context using `wasi_common`, not set unless opted-in-to
     // with the CLI.
-    legacy_p1_ctx: Option<wasi_common::WasiCtx>,
+    pub(crate) legacy_p1_ctx: Option<wasi_common::WasiCtx>,
 
     // Context for both WASIp1 and WASIp2 (and beyond) for the `wasmtime_wasi`
     // crate. This has both `wasmtime_wasi::WasiCtx` as well as a
@@ -1178,7 +1264,7 @@ pub struct Host {
     // The Mutex is only needed to satisfy the Sync constraint but we never
     // actually perform any locking on it as we use Mutex::get_mut for every
     // access.
-    wasip1_ctx: Option<Arc<Mutex<wasmtime_wasi::p1::WasiP1Ctx>>>,
+    pub(crate) wasip1_ctx: Option<Arc<Mutex<wasmtime_wasi::p1::WasiP1Ctx>>>,
 
     #[cfg(feature = "wasi-nn")]
     wasi_nn_wit: Option<Arc<wasmtime_wasi_nn::wit::WasiNnCtx>>,

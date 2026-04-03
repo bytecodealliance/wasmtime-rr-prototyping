@@ -8,6 +8,9 @@ use crate::component::{
 use crate::instance::OwnedImports;
 use crate::linker::DefinitionType;
 use crate::prelude::*;
+#[cfg(feature = "rr")]
+use crate::rr::RecordBuffer;
+use crate::rr::component_hooks;
 use crate::runtime::vm::component::{
     CallContexts, ComponentInstance, ResourceTables, TypedResource, TypedResourceIndex,
 };
@@ -528,6 +531,24 @@ impl Instance {
         }
     }
 
+    #[cfg(feature = "rr")]
+    pub(crate) fn options_memory_mut_with_recorder<'a>(
+        &self,
+        store: &'a mut StoreOpaque,
+        options: OptionsIndex,
+    ) -> (&'a mut [u8], Option<&'a mut RecordBuffer>) {
+        let memory = match self.options_memory_raw(store, options) {
+            Some(m) => m,
+            None => return (&mut [], store.record_buffer_mut()),
+        };
+        unsafe {
+            let memory = memory.as_ref();
+            let slice =
+                core::slice::from_raw_parts_mut(memory.base.as_ptr(), memory.current_length());
+            (slice, store.record_buffer_mut())
+        }
+    }
+
     /// Helper function to simultaneously get a borrow to this instance's
     /// component as well as the store that this component is contained within.
     ///
@@ -870,7 +891,7 @@ impl<'a> Instantiator<'a> {
                     // if required.
 
                     let i = unsafe {
-                        crate::Instance::new_started(store, module, imports.as_ref()).await?
+                        crate::Instance::new_started(store, module, imports.as_ref(), true).await?
                     };
                     self.instance_mut(store.0).push_instance_id(i.id());
                 }
@@ -1058,6 +1079,12 @@ impl<'a> Instantiator<'a> {
         store.store_data_mut().component_instance_mut(self.id)
     }
 
+    /// Convenience helper to return the instance ID of the `ComponentInstance` that's
+    /// being instantiated
+    fn id(&self) -> ComponentInstanceId {
+        self.id
+    }
+
     // NB: This method is only intended to be called during the instantiation
     // process because the `Arc::get_mut` here is fallible and won't generally
     // succeed once the instance has been handed to the embedder. Before that
@@ -1166,6 +1193,15 @@ impl<T: 'static> InstancePre<T> {
             .allocator()
             .increment_component_instance_count()?;
         let mut instantiator = Instantiator::new(&self.component, store.0, &self.imports);
+
+        // Record/replay hooks
+        store.0.validate_rr_config()?;
+        component_hooks::record_and_replay_validate_instantiation(
+            &mut store,
+            *self.component.checksum(),
+            instantiator.id(),
+        )?;
+
         instantiator.run(&mut store).await.map_err(|e| {
             store
                 .engine()

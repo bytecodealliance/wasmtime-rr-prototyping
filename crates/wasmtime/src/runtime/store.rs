@@ -91,6 +91,11 @@ use crate::component::concurrent;
 use crate::fiber;
 use crate::module::RegisteredModuleId;
 use crate::prelude::*;
+#[cfg(feature = "rr")]
+use crate::rr::{
+    RREvent, RecordBuffer, RecordSettings, RecordWriter, Recorder, ReplayBuffer, ReplayError,
+    ReplayReader, ReplaySettings, Replayer, Validate,
+};
 #[cfg(feature = "gc")]
 use crate::runtime::vm::GcRootsList;
 #[cfg(feature = "stack-switching")]
@@ -549,6 +554,18 @@ pub struct StoreOpaque {
     /// For example if Pulley is enabled and configured then this will store a
     /// Pulley interpreter.
     executor: Executor,
+
+    /// Storage for recording execution
+    ///
+    /// `None` implies recording is disabled for this store
+    #[cfg(feature = "rr")]
+    record_buffer: Option<RecordBuffer>,
+
+    /// Storage for replaying execution
+    ///
+    /// `None` implies replay is disabled for this store
+    #[cfg(feature = "rr")]
+    replay_buffer: Option<ReplayBuffer>,
 }
 
 /// Self-pointer to `StoreInner<T>` from within a `StoreOpaque` which is chiefly
@@ -757,6 +774,10 @@ impl<T> Store<T> {
             executor: Executor::new(engine),
             #[cfg(feature = "component-model")]
             concurrent_state: Default::default(),
+            #[cfg(feature = "rr")]
+            record_buffer: None,
+            #[cfg(feature = "rr")]
+            replay_buffer: None,
         };
         let mut inner = Box::new(StoreInner {
             inner,
@@ -876,6 +897,26 @@ impl<T> Store<T> {
             let mut inner = ManuallyDrop::take(&mut self.inner);
             core::mem::forget(self);
             ManuallyDrop::take(&mut inner.data_no_provenance)
+        }
+    }
+
+    /// Consumes this [`Store`], destroying it and obtaining
+    /// the [`RecordWriter`] initialized for recording.
+    ///
+    /// The intended use case of this method is to "take back" the
+    /// [`RecordWriter`] after all the actions to be recorded within
+    /// the store have been performed.
+    #[cfg(feature = "rr")]
+    pub fn into_record_writer(mut self) -> Result<Box<dyn RecordWriter>> {
+        // See [`Store::into_data`] and the `Drop` implementation of
+        // `Store` for documentation on this operation
+        self.run_manual_drop_routines();
+
+        unsafe {
+            let mut inner = ManuallyDrop::take(&mut self.inner);
+            core::mem::forget(self);
+            ManuallyDrop::drop(&mut inner.data_no_provenance);
+            inner.inner.into_record_writer()
         }
     }
 
@@ -1293,6 +1334,35 @@ impl<T> Store<T> {
     #[cfg(feature = "debug")]
     pub fn clear_debug_handler(&mut self) {
         self.inner.debug_handler = None;
+    }
+
+    /// Configure a [`Store`] to enable execution recording
+    ///
+    /// This must be perfomed before instantiating any module within
+    /// the Store. Events are recorded based on the provided settings, and
+    /// written to the provided writer.
+    #[cfg(feature = "rr")]
+    pub fn record(&mut self, recorder: impl RecordWriter, settings: RecordSettings) -> Result<()> {
+        self.inner.record(recorder, settings)
+    }
+
+    /// Configure a [`Store`] to enable execution replaying
+    ///
+    /// This must be initialized before instantiating any module within
+    /// the Store. Replay of events is performed according to provided settings, and
+    /// read from the provided reader.
+    ///
+    /// ## Note
+    ///
+    /// This is not a public API; replay executions are wrapped by the `ReplayEnvironment`
+    /// and `ReplayInstance` abstraction.
+    #[cfg(feature = "rr")]
+    pub(crate) fn init_replaying(
+        &mut self,
+        replayer: impl ReplayReader + 'static,
+        settings: ReplaySettings,
+    ) -> Result<()> {
+        self.inner.init_replaying(replayer, settings)
     }
 }
 
@@ -1802,6 +1872,147 @@ impl StoreOpaque {
             return Ok(self.gc_store.as_mut().unwrap());
         }
         self.allocate_gc_store(limiter).await
+    }
+
+    #[cfg(feature = "rr")]
+    pub fn record(&mut self, recorder: impl RecordWriter, settings: RecordSettings) -> Result<()> {
+        ensure!(
+            self.instance_count == 0,
+            "store recording must be initialized before instantiating any modules or components"
+        );
+        ensure!(
+            self.engine().is_recording(),
+            "store recording requires recording enabled on config"
+        );
+        self.record_buffer = Some(RecordBuffer::new_recorder(recorder, settings)?);
+        Ok(())
+    }
+
+    #[cfg(feature = "rr")]
+    pub fn into_record_writer(mut self) -> Result<Box<dyn RecordWriter>> {
+        self.record_buffer
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("record buffer in store was not initialized"))?
+            .into_writer()
+    }
+
+    #[cfg(feature = "rr")]
+    pub(crate) fn init_replaying(
+        &mut self,
+        replayer: impl ReplayReader + 'static,
+        settings: ReplaySettings,
+    ) -> Result<()> {
+        ensure!(
+            self.instance_count == 0,
+            "replaying store must not initialize any modules"
+        );
+        ensure!(
+            self.engine().is_replaying(),
+            "store replaying requires replaying enabled on config"
+        );
+        ensure!(
+            !self.engine().is_recording(),
+            "store replaying cannot be enabled while recording is enabled"
+        );
+        self.replay_buffer = Some(ReplayBuffer::new_replayer(replayer, settings)?);
+        Ok(())
+    }
+
+    #[cfg(feature = "rr")]
+    #[inline(always)]
+    pub fn record_buffer_mut(&mut self) -> Option<&mut RecordBuffer> {
+        self.record_buffer.as_mut()
+    }
+
+    #[cfg(feature = "rr")]
+    #[inline(always)]
+    pub fn replay_buffer_mut(&mut self) -> Option<&mut ReplayBuffer> {
+        self.replay_buffer.as_mut()
+    }
+
+    /// Record the given event into the store's record buffer
+    ///
+    /// Convenience wrapper around [`Recorder::record_event`]
+    #[cfg(feature = "rr")]
+    #[inline(always)]
+    pub(crate) fn record_event<T, F>(&mut self, f: F) -> Result<()>
+    where
+        T: Into<RREvent>,
+        F: FnOnce() -> T,
+    {
+        if let Some(buf) = self.record_buffer_mut() {
+            buf.record_event(f)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Conditionally record the given event into the store's record buffer
+    /// if validation is enabled for recording
+    ///
+    /// Convenience wrapper around [`Recorder::record_event_validation`]
+    #[cfg(feature = "rr")]
+    #[inline(always)]
+    pub(crate) fn record_event_validation<T, F>(&mut self, f: F) -> Result<()>
+    where
+        T: Into<RREvent>,
+        F: FnOnce() -> T,
+    {
+        if let Some(buf) = self.record_buffer_mut() {
+            buf.record_event_validation(f)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Process the next replay event as a validation event from the store's replay buffer
+    /// and if validation is enabled on replay, and run the validation check
+    ///
+    /// Convenience wrapper around [`Replayer::next_event_validation`]
+    #[cfg(feature = "rr")]
+    #[inline]
+    pub(crate) fn next_replay_event_validation<T, F, Y>(
+        &mut self,
+        expect: F,
+    ) -> Result<(), ReplayError>
+    where
+        T: TryFrom<RREvent> + Validate<Y>,
+        F: FnOnce() -> Y,
+        ReplayError: From<<T as TryFrom<RREvent>>::Error>,
+    {
+        if let Some(buf) = self.replay_buffer_mut() {
+            buf.next_event_validation::<T, Y>(&expect())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Check if replay is enabled for the Store
+    ///
+    /// Note: Defaults to false when `rr` feature is disabled
+    #[inline(always)]
+    pub fn replay_enabled(&self) -> bool {
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "rr")] {
+                self.replay_buffer.is_some()
+            } else {
+                false
+            }
+        }
+    }
+
+    /// Ensures that the Store truly has a record sink/replay source when the
+    /// engine is setup for record/replay respectively.
+    pub(crate) fn validate_rr_config(&self) -> Result<()> {
+        #[cfg(feature = "rr")]
+        {
+            if self.engine().is_recording() && !self.record_buffer.is_some() {
+                bail!("Store must have a record buffer when the engine is setup for recording");
+            } else if self.engine().is_replaying() && !self.replay_buffer.is_some() {
+                bail!("Store must have a replay source when the engine is setup for replaying");
+            }
+        }
+        Ok(())
     }
 
     #[inline(never)]
@@ -2845,6 +3056,12 @@ impl Drop for StoreOpaque {
                     allocator.decrement_component_instance_count();
                 }
             }
+        }
+
+        // Flush any remaining recording data
+        #[cfg(feature = "rr")]
+        if let Some(buf) = self.record_buffer_mut() {
+            buf.finish().unwrap();
         }
     }
 }

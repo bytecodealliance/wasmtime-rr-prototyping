@@ -2960,7 +2960,7 @@ impl Instance {
                     let ty = types[types[read_ty].ty].payload.unwrap();
                     let ptr = func::validate_inbounds_dynamic(
                         types.canonical_abi(&ty),
-                        lower.as_slice_mut(),
+                        lower.as_slice(),
                         &ValRaw::u32(read_address.try_into().unwrap()),
                     )?;
                     val.store(lower, ty, ptr)?;
@@ -3032,9 +3032,9 @@ impl Instance {
                     }
                     let size = usize::try_from(abi.size32).unwrap();
                     lower
-                        .as_slice_mut()
-                        .get_mut(read_address..)
-                        .and_then(|b| b.get_mut(..size * count))
+                        .as_slice()
+                        .get(read_address..)
+                        .and_then(|b| b.get(..size * count))
                         .ok_or_else(|| anyhow::anyhow!("read pointer out of bounds of memory"))?;
                     let mut ptr = read_address;
                     for value in values {
@@ -3838,7 +3838,7 @@ impl Instance {
         let debug_msg_address = usize::try_from(debug_msg_address)?;
         // Lower the string into the component's memory
         let offset = lower_cx
-            .as_slice_mut()
+            .as_slice()
             .get(debug_msg_address..)
             .and_then(|b| b.get(..debug_msg.bytes().len()))
             .map(|_| debug_msg_address)

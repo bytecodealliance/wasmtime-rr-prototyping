@@ -17,6 +17,7 @@
 //!
 //! Note that this entire module is gated behind the `component-model` Cargo
 //! feature.
+use serde::{Deserialize, Serialize};
 
 /// Canonical ABI-defined constant for the maximum number of "flat" parameters
 /// to a wasm function, or the maximum number of parameters a core wasm function
@@ -81,22 +82,69 @@ pub use self::types_builder::*;
 
 /// Helper macro, like `foreach_transcoder`, to iterate over builtins for
 /// components unrelated to transcoding.
+///
+/// Note: RR is not supported for component model async builtins yet; enabling
+/// both will currently throw a compile error.
 #[macro_export]
 macro_rules! foreach_builtin_component_function {
     ($mac:ident) => {
         $mac! {
+            #[rr_builtin(
+                variant = ResourceNew32,
+                entry = ResourceNew32EntryEvent,
+                exit = ResourceNew32ReturnEvent,
+                success_ty = u32
+            )]
             resource_new32(vmctx: vmctx, caller_instance: u32, resource: u32, rep: u32) -> u64;
+
+            #[rr_builtin(
+                variant = ResourceRep32,
+                entry = ResourceRep32EntryEvent,
+                exit = ResourceRep32ReturnEvent,
+                success_ty = u32
+            )]
             resource_rep32(vmctx: vmctx, caller_instance: u32, resource: u32, idx: u32) -> u64;
 
             // Returns an `Option<u32>` where `None` is "no destructor needed"
             // and `Some(val)` is "run the destructor on this rep". The option
             // is encoded as a 64-bit integer where the low bit is Some/None
             // and bits 1-33 are the payload.
+            #[rr_builtin(
+                variant = ResourceDrop,
+                entry = ResourceDropEntryEvent,
+                exit = ResourceDropReturnEvent,
+                success_ty = ResourceDropRet
+            )]
             resource_drop(vmctx: vmctx, caller_instance: u32, resource: u32, idx: u32) -> u64;
 
+            #[rr_builtin(
+                variant = ResourceTransferOwn,
+                entry = ResourceTransferOwnEntryEvent,
+                exit = ResourceTransferOwnReturnEvent,
+                success_ty = u32
+            )]
             resource_transfer_own(vmctx: vmctx, src_idx: u32, src_table: u32, dst_table: u32) -> u64;
+
+            #[rr_builtin(
+                variant = ResourceTransferBorrow,
+                entry = ResourceTransferBorrowEntryEvent,
+                exit = ResourceTransferBorrowReturnEvent,
+                success_ty = u32
+            )]
             resource_transfer_borrow(vmctx: vmctx, src_idx: u32, src_table: u32, dst_table: u32) -> u64;
+
+            #[rr_builtin(
+                variant = ResourceEnterCall,
+                entry = ResourceEnterCallEntryEvent
+            )]
             resource_enter_call(vmctx: vmctx);
+
+            #[rr_builtin(
+                variant = ResourceExitCall,
+                entry = ResourceExitCallEntryEvent,
+                exit = ResourceExitCallReturnEvent,
+                success_ty = ()
+            )]
             resource_exit_call(vmctx: vmctx) -> bool;
 
             #[cfg(feature = "component-model-async")]
@@ -225,3 +273,7 @@ declare_builtin_index! {
     /// An index type for component builtin functions.
     pub struct ComponentBuiltinFunctionIndex: foreach_builtin_component_function;
 }
+
+/// Return value from `resource.drop` builtin.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ResourceDropRet(pub Option<u32>);
